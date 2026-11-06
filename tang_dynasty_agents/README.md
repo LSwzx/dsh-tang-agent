@@ -126,11 +126,13 @@ tang_dynasty_agents/
 Agent 会调用 `plugin_manager` 的 `install_bundle`，`target` 指向该绝对路径。
 安装结果为 `applied` 即已生效；若显示 `restart-required`，重启 DSH 即可。
 
-### 方式 C：CLI
+### 方式 C：CLI（仅当 `dsh` 已在 PATH 中）
 
 ```powershell
 dsh plugin --profile desktop add D:\dshprogram\tang_dynasty_agents
 ```
+
+若提示找不到 `dsh` 命令（DSH Desktop 默认不一定写入 PATH），请使用方式 A 或 B。
 
 ### 激活与打开
 

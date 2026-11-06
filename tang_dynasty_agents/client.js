@@ -1218,6 +1218,19 @@ function tdaUseLang() {
   return String(active).toLowerCase().slice(0, 2) === 'zh' ? 'zh' : 'en';
 }
 
+function tdaClock(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  } catch (error) {
+    return String(iso || '').slice(11, 19);
+  }
+}
+
 function tdaFormat(template, values) {
   let output = String(template);
   Object.keys(values || {}).forEach((key) => {
@@ -1587,7 +1600,7 @@ function AuditRail(props) {
                 { className: 'tda-audit-meta' },
                 h('span', { className: 'tda-audit-actor' }, entry.actor),
                 h('span', { className: 'tda-audit-action' }, entry.action),
-                h('span', null, String(entry.at || '').slice(11, 19)),
+                h('span', null, tdaClock(entry.at)),
               ),
               h('p', { className: 'tda-audit-detail' }, entry.detail),
             ),
