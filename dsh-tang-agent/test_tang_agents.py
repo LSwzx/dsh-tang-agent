@@ -1,4 +1,4 @@
-"""Tang-Dynasty-Agents 单元测试.
+"""dsh-tang-agent 单元测试.
 
 覆盖：
 1. 默认全流程：中书初拟 → 门下驳回 → 修订 → 准奏 → 六部覆命；

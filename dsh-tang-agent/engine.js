@@ -1,5 +1,5 @@
 /**
- * Tang-Dynasty-Agents · 三省六部状态机（JS 共享引擎）
+ * dsh-tang-agent · 三省六部状态机（JS 共享引擎）
  *
  * 同一份引擎有三个消费者：
  *   1. Host 工具 `tang_court`（index.js 直接 import）；
@@ -547,7 +547,7 @@ export function summary(state) {
 /** 渲染给模型看的纯文本轨迹（Host 工具返回值）。 */
 export function renderReport(state) {
   const lines = [];
-  lines.push('# Tang-Dynasty-Agents · 三省六部');
+  lines.push('# 三省六部工作流 · dsh-tang-agent');
   lines.push('');
   lines.push('圣旨：' + state.edict);
   lines.push('结局：' + summary(state));

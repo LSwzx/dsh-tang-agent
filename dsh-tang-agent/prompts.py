@@ -1,4 +1,4 @@
-"""Tang-Dynasty-Agents · 三省六部古风 System Prompts.
+"""dsh-tang-agent · 三省六部古风 System Prompts.
 
 本模块只负责“人设与章法”，不含任何编排逻辑。`graph.py` 取用这里的
 prompt 构造器，把圣旨、草案、条陈注入其中；侧边栏 UI 与 Host 工具共用

@@ -1,8 +1,8 @@
 {
-  "name": "tang-dynasty-agents",
+  "name": "dsh-tang-agent",
   "version": "1.0.0",
   "private": true,
-  "description": "Tang-Dynasty-Agents：以三省六部制编排 Agent 协作，并在 DSH 侧边栏可视化圣旨流转（中书起草 → 门下封驳 → 尚书下发 → 六部覆命）。",
+  "description": "dsh-tang-agent · 三省六部工作流：以三省六部制编排 Agent 协作，并在 DSH 侧边栏可视化圣旨流转（中书起草 → 门下封驳 → 尚书下发 → 六部覆命）。",
   "type": "module",
   "icon": "icon.svg",
   "license": "MIT",

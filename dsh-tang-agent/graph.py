@@ -1,4 +1,4 @@
-"""Tang-Dynasty-Agents · 三省六部核心流转逻辑（Python 参考实现）.
+"""dsh-tang-agent · 三省六部核心流转逻辑（Python 参考实现）.
 
 流程
 ----
@@ -28,7 +28,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-try:  # 兼容 `python graph.py` 与 `python -m tang_dynasty_agents.graph`
+try:  # 兼容包内相对导入与 `python graph.py` 直接运行
     from .prompts import MINISTRIES, MINISTRY_ORDER
 except ImportError:  # pragma: no cover - 直接运行脚本时
     from prompts import MINISTRIES, MINISTRY_ORDER
@@ -705,7 +705,7 @@ def run_court(edict: str, **kwargs: object) -> CourtRun:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Tang-Dynasty-Agents：以三省六部制演练一道圣旨。"
+        description="dsh-tang-agent · 三省六部工作流：以三省六部制演练一道圣旨。"
     )
     parser.add_argument("edict", help="圣旨正文")
     parser.add_argument(

@@ -1,11 +1,11 @@
-# Tang-Dynasty-Agents · 三省六部
+# dsh-tang-agent · 三省六部工作流
 
 > 一道圣旨如何变成六部覆命？  
 > 把唐代三省六部制做成 DSH 插件：中书起草、门下封驳、尚书下发、六部并行，
 > 侧边栏实时展示「圣旨流转」，并内置连驳三次自动上报皇帝的防死锁机制。
 
-- **插件名**：`tang-dynasty-agents`
-- **显示名**：Tang-Dynasty-Agents · 三省六部
+- **插件名**：`dsh-tang-agent`
+- **显示名**：三省六部工作流（dsh-tang-agent）
 - **形态**：DSH Bundle（Host 工具 + Web Client 侧边栏面板）
 - **依赖**：无第三方运行时依赖；Host 半部只用 Node 内置能力
 - **默认行为**：确定性沙盘，不访问网络、不调用模型，可离线演示与测试
@@ -74,7 +74,7 @@ sequenceDiagram
 ## 二、文件结构
 
 ```
-tang_dynasty_agents/
+dsh-tang-agent/
 ├── README.md                 # 本文件：架构图、安装、激活与使用说明
 ├── package.json              # DSH Bundle 清单（Host 入口 + Client 入口 + 图标 + locale）
 ├── cordis.patch.yml          # 向 DSH 组合插入插件行
@@ -94,7 +94,8 @@ tang_dynasty_agents/
 │   └── icons.js              # 唐印与六部字符图标
 └── scripts/
     ├── build-client.mjs      # 把 engine.js + ui/*.js 拼成 client.js
-    └── smoke.mjs             # Node 冒烟测试（与 Python 行为对齐）
+    ├── smoke.mjs             # Node 冒烟测试（与 Python 行为对齐）
+    └── check-client.mjs      # 无浏览器渲染装配检查
 ```
 
 **两份实现，一套语义**：
@@ -113,15 +114,15 @@ tang_dynasty_agents/
 
 1. 打开 DSH → **设置 → 插件**；
 2. 选择 **安装本地插件 / Install bundle**；
-3. 选择目录：`D:\dshprogram\tang_dynasty_agents`；
-4. 安装完成后，在插件列表中找到 **Tang-Dynasty-Agents · 三省六部**，确认开关为开启；
-5. 左侧栏底部会出现朱砂色 **“唐”** 印章图标。
+3. 选择目录：`D:\dshprogram\dsh-tang-agent`；
+4. 安装完成后，在插件列表中找到 **三省六部工作流（dsh-tang-agent）**，确认开关为开启；
+5. 左侧栏底部会出现朱砂色 **“唐”** 印章图标，侧边栏标题为 **三省六部工作流**。
 
 ### 方式 B：让 DSH Agent 安装
 
 对 DSH 说：
 
-> 把 `D:\dshprogram\tang_dynasty_agents` 作为 bundle 安装到当前 profile。
+> 把 `D:\dshprogram\dsh-tang-agent` 作为 bundle 安装到当前 profile。
 
 Agent 会调用 `plugin_manager` 的 `install_bundle`，`target` 指向该绝对路径。
 安装结果为 `applied` 即已生效；若显示 `restart-required`，重启 DSH 即可。
@@ -129,7 +130,7 @@ Agent 会调用 `plugin_manager` 的 `install_bundle`，`target` 指向该绝对
 ### 方式 C：CLI（仅当 `dsh` 已在 PATH 中）
 
 ```powershell
-dsh plugin --profile desktop add D:\dshprogram\tang_dynasty_agents
+dsh plugin --profile desktop add D:\dshprogram\dsh-tang-agent
 ```
 
 若提示找不到 `dsh` 命令（DSH Desktop 默认不一定写入 PATH），请使用方式 A 或 B。
@@ -137,7 +138,7 @@ dsh plugin --profile desktop add D:\dshprogram\tang_dynasty_agents
 ### 激活与打开
 
 - 侧边栏左列（全局面板图标区）→ 点击 **唐** 印；
-- 中央主面板会打开「Tang-Dynasty-Agents · 三省六部」；
+- 中央主面板会打开「三省六部工作流」；
 - 若图标未出现：
   1. 设置 → 插件，确认插件已启用；
   2. 刷新页面（`Ctrl + R`）；
@@ -167,7 +168,7 @@ dsh plugin --profile desktop add D:\dshprogram\tang_dynasty_agents
 7. **节奏**：慢 / 标准 / 快三档；「重置」只清空沙盘，保留已输入的圣旨。
 
 面板状态保存在组件内存，最近一次圣旨写入 `localStorage`（键
-`tang-dynasty-agents:last-edict`），不会上传到任何服务器。
+`dsh-tang-agent:last-edict`），不会上传到任何服务器。
 
 ---
 
@@ -212,7 +213,7 @@ dsh plugin --profile desktop add D:\dshprogram\tang_dynasty_agents
 ## 七、Python 参考实现
 
 ```powershell
-cd D:\dshprogram\tang_dynasty_agents
+cd D:\dshprogram\dsh-tang-agent
 
 # 跑一道圣旨（默认会经历一次驳回与修订）
 python graph.py "着工部于三月内修缮东市水渠，户部拨钱粮，刑部核验工料。"
@@ -251,7 +252,7 @@ TangCourt(
 ## 八、测试与构建
 
 ```powershell
-cd D:\dshprogram\tang_dynasty_agents
+cd D:\dshprogram\dsh-tang-agent
 
 # Python：14 个用例，覆盖默认驳回、连驳三次上报、亲批、序列化、prompt 完整性
 python test_tang_agents.py -v

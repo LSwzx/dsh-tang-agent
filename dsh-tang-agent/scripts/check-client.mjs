@@ -62,7 +62,7 @@ vm.runInContext(code, sandbox, { filename: 'client.js' });
 
 const definition = sandbox.__definition;
 assert.ok(definition, 'client.js did not call __ModuleLoader__.load');
-assert.equal(definition.id, 'tang-dynasty-agents');
+assert.equal(definition.id, 'dsh-tang-agent');
 assert.equal(typeof definition.factory, 'function');
 
 const module = definition.factory((name) => {
@@ -87,6 +87,7 @@ const ctx = {
         slot: spec.name,
         key: spec.id || spec.key,
         component,
+        label: typeof spec.label === 'function' ? spec.label() : spec.label,
       });
     },
   },
@@ -101,6 +102,7 @@ assert.deepEqual(
     ['main', 'tang', 'function'],
   ],
 );
+assert.equal(registrations[0].label, '三省六部工作流', 'sidebar title must be 三省六部工作流');
 
 /** 递归展开函数组件，得到一棵由字符串与宿主元素组成的树。 */
 function renderNode(node) {
@@ -149,7 +151,7 @@ const iconText = renderPanel(sidebar, { size: 22, active: true });
 assert.ok(iconText.includes('唐'), 'sidebar icon must render the 唐 seal');
 
 const idle = renderPanel(panel, {});
-assert.ok(idle.includes('Tang-Dynasty-Agents'));
+assert.ok(idle.includes('三省六部工作流'), 'idle panel should show the new display title');
 assert.ok(idle.includes('丹墀静候'), 'idle panel should show the empty state');
 assert.ok(idle.includes('工部') && idle.includes('吏部'), 'idle panel should preview six ministries');
 

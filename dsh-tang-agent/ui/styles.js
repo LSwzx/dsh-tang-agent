@@ -1,5 +1,5 @@
 /**
- * Tang-Dynasty-Agents · 侧边栏面板样式
+ * dsh-tang-agent · 侧边栏面板样式
  *
  * 约束：
  * - 所有选择器以 .tda- 前缀命名，不污染宿主页面；

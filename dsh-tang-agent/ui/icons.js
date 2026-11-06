@@ -1,5 +1,5 @@
 /**
- * Tang-Dynasty-Agents · 图形素材
+ * dsh-tang-agent · 图形素材
  * 印章与六部字符均为本插件原创绘制，不依赖外部字体或图片。
  */
 

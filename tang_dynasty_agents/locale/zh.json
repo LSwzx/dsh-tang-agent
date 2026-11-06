@@ -1,6 +1,0 @@
-{
-  "meta": {
-    "title": "Tang-Dynasty-Agents · 三省六部",
-    "description": "以三省六部制编排 Agent 协作：中书起草、门下朱批（连驳三次上报皇帝）、尚书下发、六部并行覆命；侧边栏可视化圣旨流转，另提供 tang_court 工具。"
-  }
-}

@@ -1,5 +1,5 @@
 /**
- * Tang-Dynasty-Agents · Host 半部
+ * dsh-tang-agent · Host 半部
  *
  * 向模型暴露一个 `tang_court` 工具：把一道圣旨交给三省六部状态机，
  * 返回完整的起居注（下旨、草拟、朱批、驳回、下发、六部覆命）。
@@ -10,7 +10,7 @@
 
 import { runAll, renderReport } from './engine.js';
 
-export const name = 'tang-dynasty-agents';
+export const name = 'dsh-tang-agent';
 export const inject = ['tools'];
 
 const MAX_EDICT_LENGTH = 4000;
@@ -19,7 +19,7 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'tang_court',
     description:
-      'Tang-Dynasty-Agents：以三省六部制（中书起草 → 门下朱批 → 尚书下发 → 六部覆命）演练一道圣旨。' +
+      'dsh-tang-agent：以三省六部制（中书起草 → 门下朱批 → 尚书下发 → 六部覆命）演练一道圣旨。' +
       '默认门下省会驳回一次并要求修订；连续驳回三次则封还圣旨、上报皇帝（防死锁）。' +
       '返回完整起居注与六部交付物。纯本地确定性引擎，不调用模型、不访问网络。',
     parameters: {

@@ -1,5 +1,5 @@
 /**
- * Tang-Dynasty-Agents · 侧边栏面板（React，无 JSX）
+ * dsh-tang-agent · 侧边栏面板（React，无 JSX）
  *
  * 注册两处：
  *   - sidebar.panellist / id=tang  → 左侧栏“唐”字印章入口
@@ -14,8 +14,8 @@ let tangCtx = null;
 
 const TDA_TEXT = {
   zh: {
-    title: 'Tang-Dynasty-Agents',
-    subtitle: '三省六部 · 圣旨流转',
+    title: '三省六部工作流',
+    subtitle: 'dsh-tang-agent · 圣旨流转',
     railLabel: '三省六部流转阶段',
     edictTitle: '皇帝 · 下旨',
     emperorEn: 'Emperor',
@@ -85,8 +85,8 @@ const TDA_TEXT = {
     },
   },
   en: {
-    title: 'Tang-Dynasty-Agents',
-    subtitle: 'Three Departments · Six Ministries',
+    title: 'Three Departments Workflow',
+    subtitle: 'dsh-tang-agent · Edict flow',
     railLabel: 'Court workflow stages',
     edictTitle: 'Emperor · Edict',
     emperorEn: 'Emperor',
@@ -157,7 +157,7 @@ const TDA_TEXT = {
   },
 };
 
-const TDA_STORAGE_KEY = 'tang-dynasty-agents:last-edict';
+const TDA_STORAGE_KEY = 'dsh-tang-agent:last-edict';
 const TDA_SAMPLE_EDICT = TDA_TEXT.zh.presets[0];
 
 function tdaLoadEdict() {
@@ -956,7 +956,7 @@ function TangSidebarIcon(props) {
     'div',
     {
       className: 'tda-sidebar-icon' + (active ? ' is-active' : ''),
-      title: 'Tang-Dynasty-Agents · 三省六部 / Three Departments',
+      title: '三省六部工作流 · dsh-tang-agent',
     },
     h(
       'span',
@@ -986,7 +986,7 @@ function apply(ctx) {
     disposeStyles = styleService.insert(TANG_CSS);
   } else if (typeof document !== 'undefined') {
     const element = document.createElement('style');
-    element.setAttribute('data-plugin', 'tang-dynasty-agents');
+    element.setAttribute('data-plugin', 'dsh-tang-agent');
     element.textContent = TANG_CSS;
     document.head.appendChild(element);
     disposeStyles = () => {
@@ -994,7 +994,7 @@ function apply(ctx) {
     };
   }
   if (disposeStyles && ctx.effect) {
-    ctx.effect(() => disposeStyles, 'tang-dynasty-agents: styles');
+    ctx.effect(() => disposeStyles, 'dsh-tang-agent: styles');
   }
 
   if (!ctx.slots) return;
@@ -1004,7 +1004,7 @@ function apply(ctx) {
         name: 'sidebar.panellist',
         id: 'tang',
         order: 30,
-        label: () => 'Tang-Dynasty-Agents',
+        label: () => '三省六部工作流',
       },
       TangSidebarIcon,
     ),
