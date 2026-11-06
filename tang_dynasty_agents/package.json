@@ -1,0 +1,55 @@
+{
+  "name": "tang-dynasty-agents",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tang-Dynasty-Agents：以三省六部制编排 Agent 协作，并在 DSH 侧边栏可视化圣旨流转（中书起草 → 门下封驳 → 尚书下发 → 六部覆命）。",
+  "type": "module",
+  "icon": "icon.svg",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "agents",
+    "chinese-history"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "engine.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale",
+    "ui",
+    "scripts",
+    "prompts.py",
+    "graph.py",
+    "test_tang_agents.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "entry": "./client.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "python test_tang_agents.py && node scripts/smoke.mjs && node scripts/check-client.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
