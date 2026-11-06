@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Three Departments Workflow (dsh-tang-agent)",
+    "description": "dsh-tang-agent: orchestrate agents through the Tang court — Zhongshu drafts, Menxia reviews (three rejections escalate to the Emperor), Shangshu dispatches, and the Six Ministries report. Includes a sidebar flow view and the tang_court tool."
+  }
+}
