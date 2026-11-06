@@ -1,6 +1,6 @@
 # 本仓库只收纳 Tang-Dynasty-Agents 插件，不把工作区中的无关业务文件纳入版本控制。
 /*
-!/tang_dynasty_agents/
+!/dsh-tang-agent/
 !/.gitignore
 
 # Python 缓存

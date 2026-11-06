@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="三省六部工作流 · dsh-tang-agent 唐印">
+  <defs>
+    <linearGradient id="tda-seal" x1="0" y1="0" x2="0.2" y2="1">
+      <stop offset="0" stop-color="#b23b30"/>
+      <stop offset="1" stop-color="#8f241d"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="url(#tda-seal)"/>
+  <rect x="13" y="13" width="102" height="102" rx="14" fill="none" stroke="#f6ecdc" stroke-opacity="0.72" stroke-width="3"/>
+  <text x="64" y="62" text-anchor="middle" dominant-baseline="middle" font-family="Songti SC, STSong, Noto Serif SC, serif" font-size="56" font-weight="700" fill="#f8f0e2">唐</text>
+  <text x="64" y="101" text-anchor="middle" font-family="Songti SC, STSong, Noto Serif SC, serif" font-size="10.5" letter-spacing="4" fill="#f8f0e2" fill-opacity="0.82">三省六部</text>
+</svg>
