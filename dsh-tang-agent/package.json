@@ -21,6 +21,7 @@
   },
   "files": [
     "index.js",
+    "court",
     "engine.js",
     "client.js",
     "cordis.patch.yml",
@@ -46,7 +47,7 @@
   },
   "scripts": {
     "build": "node scripts/build-client.mjs",
-    "test": "python test_tang_agents.py && node scripts/smoke.mjs && node scripts/check-client.mjs",
+    "test": "python test_tang_agents.py && node scripts/check-court.mjs && node scripts/smoke.mjs && node scripts/check-client.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "engines": {

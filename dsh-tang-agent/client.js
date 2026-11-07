@@ -4,600 +4,57 @@ window.__ModuleLoader__.load({
   factory(require) {
     'use strict';
     const React = require('react');
-/**
- * dsh-tang-agent · 三省六部状态机（JS 共享引擎）
- *
- * 同一份引擎有三个消费者：
- *   1. Host 工具 `tang_court`（index.js 直接 import）；
- *   2. 侧边栏 UI（scripts/build-client.mjs 去掉 export 后内联进 client.js）；
- *   3. Node 冒烟测试（scripts/smoke.mjs 直接 import）。
- *
- * 阶段、字段与 Python 参考实现 graph.py 保持一致：
- *   idle → drafting → reviewing ──准奏──→ dispatching → executing → completed
- *                          │
- *                          └─驳回（≤3）→ revising → reviewing
- *                               连驳 3 次 → escalated（封还御前）
- *
- * 本引擎不访问网络、不读取文件、不依赖大模型：它是一套确定性的
- * “宫廷沙盘”。真实 LLM 适配器只需替换 draft / review / execute 三个函数。
- */
-
-const STAGE_LABELS = {
-  idle: '静候圣旨',
-  drafting: '中书起草',
-  reviewing: '门下朱批',
-  revising: '封还重拟',
-  dispatching: '尚书下发',
-  executing: '六部奉行',
-  completed: '六部覆命',
-  escalated: '封还御前',
-};
+/** 三部六部共享元数据；Host 与 Client 构建共用同一份。 */
 
 const MINISTRY_ORDER = ['works', 'justice', 'war', 'rites', 'revenue', 'personnel'];
 
 const MINISTRIES = {
-  works: {
-    id: 'works',
-    name: '工部',
-    en: 'Works',
-    duty: '营造、工程、器物、代码与交付物',
-    tools: ['draw_blueprint', 'estimate_works'],
-    focus: '将圣旨落为可交付之物：图样、工序、验收节点，一件不可缺。',
-    deliverable: '营造图样、工序分解、可验收交付件',
-  },
-  justice: {
-    id: 'justice',
-    name: '刑部',
-    en: 'Justice',
-    duty: '律令、合规、风险审查与争端处置',
-    tools: ['check_statutes', 'assess_risk'],
-    focus: '为圣旨划定律令红线：合规审查、风险分级、处置预案。',
-    deliverable: '合规意见书、风险清单、红线处置建议',
-  },
-  war: {
-    id: 'war',
-    name: '兵部',
-    en: 'War',
-    duty: '调度、排期、人手、应急与执行保障',
-    tools: ['muster_route', 'schedule_guard'],
-    focus: '把差事排成可执行的次序：关键路径、人手调度、应急后备。',
-    deliverable: '调度图、里程碑、应急预案',
-  },
-  rites: {
-    id: 'rites',
-    name: '礼部',
-    en: 'Rites',
-    duty: '文告、仪注、对外沟通与教化',
-    tools: ['draft_notice', 'arrange_rites'],
-    focus: '把朝廷决定写成得体文字：告示口径、仪注、对外辞令。',
-    deliverable: '告示文稿、仪注单、对外口径',
-  },
-  revenue: {
-    id: 'revenue',
-    name: '户部',
-    en: 'Revenue',
-    duty: '钱粮、预算、成本与账目',
-    tools: ['budget_ledger', 'audit_grain'],
-    focus: '核算钱粮用度：预算科目、拨付次序、缺口与节流之法。',
-    deliverable: '预算表、拨付次序、节流方案',
-  },
-  personnel: {
-    id: 'personnel',
-    name: '吏部',
-    en: 'Personnel',
-    duty: '人事、差遣、考成与激励',
-    tools: ['assign_officials', 'appraise_merit'],
-    focus: '为差事配人：主事、协办、复核、考成与赏罚。',
-    deliverable: '差遣表、考成法、复核名单',
-  },
+  works: { id: 'works', name: '工部', en: 'Works', glyph: '工', duty: '营造、工程、器物、代码与交付物', toolLabel: '文件读写' },
+  justice: { id: 'justice', name: '刑部', en: 'Justice', glyph: '刑', duty: '律令、合规、静态扫描与风险审查', toolLabel: '代码扫描' },
+  war: { id: 'war', name: '兵部', en: 'War', glyph: '兵', duty: '调度、终端执行、排期与应急', toolLabel: '终端命令' },
+  rites: { id: 'rites', name: '礼部', en: 'Rites', glyph: '礼', duty: '文告、文档、仪注与对外沟通', toolLabel: '文档读取' },
+  revenue: { id: 'revenue', name: '户部', en: 'Revenue', glyph: '户', duty: '钱粮、预算、字符与 Token 统计', toolLabel: '字数统计' },
+  personnel: { id: 'personnel', name: '吏部', en: 'Personnel', glyph: '吏', duty: '人事、差遣、工具面与考成', toolLabel: '工具盘点' },
 };
 
-const DEADLINES = ['三日', '五日', '旬日', '半月', '不拘'];
+const EXTRA_ROLES = {
+  zhongshu: { id: 'zhongshu', name: '中书省', en: 'Zhongshu', glyph: '中', duty: '起草行动草案', toolLabel: '只读' },
+  qintianjian: { id: 'qintianjian', name: '钦天监', en: 'Observatory', glyph: '天', duty: '核验当前 DSH 能力面与方案可行性', toolLabel: '能力探测' },
+  menxia: { id: 'menxia', name: '门下省', en: 'Menxia', glyph: '门', duty: '契约审议与封驳', toolLabel: '只读' },
+  shangshu: { id: 'shangshu', name: '尚书省', en: 'Shangshu', glyph: '尚', duty: '派发、督办与汇总', toolLabel: '只读' },
+};
 
-/** 稳定哈希：同一道圣旨永远得到同一套数字，便于截图与测试复现。 */
-function hashSeed(text) {
-  let hash = 5381;
-  const value = String(text || '');
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) + hash + value.charCodeAt(index)) >>> 0;
-  }
-  return hash >>> 0;
-}
+const ROLE_LABELS = {
+  ...Object.fromEntries(Object.values(MINISTRIES).map((m) => [m.id, m.name])),
+  ...Object.fromEntries(Object.values(EXTRA_ROLES).map((r) => [r.id, r.name])),
+};
 
-function excerpt(text, limit = 60) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  return clean.length <= limit ? clean : clean.slice(0, limit) + '……';
-}
+const STAGE_LABELS = {
+  idle: '静候圣旨',
+  drafting: '中书起草',
+  feasibility: '钦天监勘验',
+  reviewing: '门下朱批',
+  revising: '封还重拟',
+  dispatching: '尚书下发',
+  executing: '六部奉行',
+  aggregating: '尚书汇总',
+  completed: '六部覆命',
+  escalated: '封还御前',
+  cancelled: '已中止',
+  failed: '运行失败',
+  quick: '快速问答',
+  single: '单部直调',
+};
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function stageLabel(phase) {
-  return STAGE_LABELS[phase] || phase;
-}
-
-function createState(options = {}) {
-  return {
-    edict: '',
-    phase: 'idle',
-    revision: 0,
-    rejections: 0,
-    maxRejections: options.maxRejections || 3,
-    draft: null,
-    review: null,
-    results: [],
-    history: [],
-    escalationReason: '',
-    runId: '',
-    forceReject: false,
-    startedAt: null,
-    finishedAt: null,
-  };
-}
-
-function pushHistory(state, actor, action, detail, tone) {
-  const entry = {
-    seq: state.history.length + 1,
-    actor,
-    action,
-    detail,
-    tone: tone || 'neutral',
-    at: nowIso(),
-  };
-  return state.history.concat([entry]);
-}
-
-/** 皇帝下旨：重置沙盘，进入“中书起草”。 */
-function begin(edict, options = {}) {
-  const text = String(edict || '').trim();
-  if (!text) throw new Error('圣旨不可为空');
-  const state = createState(options);
-  return {
-    ...state,
-    edict: text,
-    phase: 'drafting',
-    runId: 'tang-' + hashSeed(text).toString(16),
-    forceReject: Boolean(options.forceReject),
-    startedAt: nowIso(),
-    history: pushHistory(state, '皇帝', '下旨', text, 'neutral'),
-  };
-}
-
-/** 中书省草拟 / 修订。第一稿刻意缺风险与验收，用来演示门下封驳。 */
-function makeDraft(edict, revision, previous) {
-  const seed = hashSeed(edict);
-  const revised = revision >= 2;
-  const orders = MINISTRY_ORDER.map((key, index) => {
-    const meta = MINISTRIES[key];
-    return {
-      ministry: key,
-      name: meta.name,
-      objective: `${meta.focus} 圣旨要点：${excerpt(edict, 48)}`,
-      deliverable: meta.deliverable,
-      tools: meta.tools.slice(),
-      deadline: DEADLINES[(seed + index) % DEADLINES.length],
-    };
-  });
-
-  const summary = `奉天承运皇帝诏曰：${excerpt(edict, 80)}。臣中书省谨拟六部条陈：工部营造、刑部法度、兵部调度、礼部文告、户部钱粮、吏部考成，各专其职，并行而不相害。${
-    revised ? '风险与验收已备，恭请圣裁。' : ''
-  }`;
-
-  const draft = {
-    revision,
-    summary,
-    orders,
-    risks: revised
-      ? [
-          '工期风险：关键路径若遇料具不齐，工期顺延；工部预设三日缓冲。',
-          '钱粮风险：预算若超支一成，户部即启节流与分期拨付。',
-          '协同风险：六部并行若令出多门，尚书省按里程碑统一督办。',
-        ]
-      : [],
-    acceptance: revised
-      ? [
-          '六部交付物齐备，且经门下省抽验关键节点。',
-          '预算、工期、风险三项与草案一致，偏差须书面说明。',
-          '圣旨目标可逐条对应到条陈，无遗漏、无越权。',
-        ]
-      : [],
-    notes: revised
-      ? `依门下省驳议修订：补风险预案与验收标准，余条不变。${
-          previous ? `（据第 ${previous.revision} 稿）` : ''
-        }`
-      : '初拟，恭候门下省朱批。',
-  };
-  return draft;
-}
-
-/** 门下省六条审核；forceReject 用于“连驳演练”。 */
-function reviewDraft(draft, forceReject = false) {
-  const issues = [];
-  if (!draft || draft.orders.length !== MINISTRY_ORDER.length) {
-    issues.push('分职不备：应有六部条陈，今仅 ' + (draft ? draft.orders.length : 0) + ' 部。');
-  }
-  if (!draft || !draft.risks || draft.risks.length === 0) {
-    issues.push('未列风险预案：须写明触发条件与应对之策。');
-  }
-  if (!draft || !draft.acceptance || draft.acceptance.length === 0) {
-    issues.push('未列验收标准：交付物无从检验。');
-  }
-  if (draft) {
-    for (const order of draft.orders) {
-      if (!order.deliverable || !order.deliverable.trim()) {
-        issues.push(`${order.name}条陈无交付物。`);
-      }
-    }
-    if (!draft.summary || draft.summary.trim().length < 10) {
-      issues.push('草案主旨含混，不足以服众。');
-    }
-  }
-  if (forceReject) {
-    issues.push('门下省加驳：此本与圣旨本意仍有出入，着即重拟。');
-  }
-  const approved = issues.length === 0;
-  return {
-    approved,
-    comment: approved
-      ? '准奏。六部条陈齐备，风险有备，验收有据，可付尚书省施行。'
-      : `驳回。${issues[0]} 其余各条，着中书省一并修订。`,
-    issues,
-    revision: draft ? draft.revision : 0,
-  };
-}
-
-function ministryMetrics(key, seed) {
-  switch (key) {
-    case 'works':
-      return [
-        { artifact: '《工部营造图样》', metrics: { 工序: `${4 + (seed % 5)} 道` } },
-        {
-          artifact: `工期与料具估算表（${5 + (seed % 20)} 日）`,
-          metrics: { 工期: `${5 + (seed % 20)} 日`, 料具: '按图支给' },
-        },
-      ];
-    case 'justice':
-      return [
-        { artifact: '《律令合规意见书》', metrics: { 红线: `${2 + (seed % 3)} 条` } },
-        { artifact: '风险清单与处置建议', metrics: { 风险项: `${3 + (seed % 4)} 项` } },
-      ];
-    case 'war':
-      return [
-        { artifact: '并行调度图与关键路径', metrics: { 役夫: `${12 + (seed % 30)} 人` } },
-        { artifact: '里程碑表与应急预案', metrics: { 缓冲: `${1 + (seed % 3)} 日` } },
-      ];
-    case 'rites':
-      return [
-        { artifact: '《告示》与对外口径', metrics: { 仪注: `${3 + (seed % 3)} 条` } },
-        { artifact: '仪注单与称谓表', metrics: { 口径: '已统一' } },
-      ];
-    case 'revenue':
-      return [
-        { artifact: '预算表与拨付次序', metrics: { 预算: `${80 + (seed % 120)} 贯` } },
-        { artifact: '账目复核节点', metrics: { 缺口: `${seed % 20} 贯` } },
-      ];
-    default:
-      return [
-        { artifact: '差遣表（主事/协办/复核）', metrics: { 差遣: `${3 + (seed % 4)} 员` } },
-        { artifact: '考成法与赏罚尺度', metrics: { 考成: '三档九等' } },
-      ];
-  }
-}
-
-/** 六部执行：每部只调自己的工具，产出结构化覆命。 */
-function executeOrder(order, edict) {
-  const meta = MINISTRIES[order.ministry];
-  const seed = hashSeed(String(edict) + order.ministry);
-  const artifacts = [];
-  const metrics = {};
-  for (const tool of ministryMetrics(order.ministry, seed)) {
-    artifacts.push(tool.artifact);
-    Object.assign(metrics, tool.metrics);
-  }
-  return {
-    ministry: order.ministry,
-    name: meta.name,
-    status: 'done',
-    summary: `${meta.name}奉旨办差：${order.deliverable}已成，限期${order.deadline}，恭候验收。`,
-    artifacts,
-    metrics,
-  };
-}
-
-/** 单步推进：返回新的 state；终态返回原对象，React 因此不会空转。 */
-function step(state) {
-  switch (state.phase) {
-    case 'drafting': {
-      const draft = makeDraft(state.edict, state.revision + 1, state.draft);
-      const next = {
-        ...state,
-        revision: draft.revision,
-        draft,
-        phase: 'reviewing',
-        history: pushHistory(
-          state,
-          '中书省',
-          draft.revision === 1 ? '草拟' : '修订',
-          `第 ${draft.revision} 稿：${draft.summary}`,
-          'neutral',
-        ),
-      };
-      return next;
-    }
-    case 'reviewing': {
-      const review = reviewDraft(state.draft, state.forceReject);
-      if (review.approved) {
-        return {
-          ...state,
-          review,
-          phase: 'dispatching',
-          history: pushHistory(state, '门下省', '准奏', review.comment, 'ok'),
-        };
-      }
-      const rejections = state.rejections + 1;
-      let history = pushHistory(
-        state,
-        '门下省',
-        '驳回',
-        review.comment + '　驳议：' + review.issues.join('；'),
-        'warn',
-      );
-      if (rejections >= state.maxRejections) {
-        const reason = `门下省连驳 ${rejections} 次，依制封还圣旨，直呈御前，着皇帝圣裁后再行。`;
-        history = history.concat([
-          {
-            seq: history.length + 1,
-            actor: '门下省',
-            action: '封还',
-            detail: reason,
-            tone: 'bad',
-            at: nowIso(),
-          },
-        ]);
-        return {
-          ...state,
-          review,
-          rejections,
-          phase: 'escalated',
-          escalationReason: reason,
-          history,
-          finishedAt: nowIso(),
-        };
-      }
-      history = history.concat([
-        {
-          seq: history.length + 1,
-          actor: '门下省',
-          action: '封还重拟',
-          detail: `第 ${rejections} 次驳回，限中书省修订后复奏。`,
-          tone: 'warn',
-          at: nowIso(),
-        },
-      ]);
-      return { ...state, review, rejections, phase: 'revising', history };
-    }
-    case 'revising': {
-      const draft = makeDraft(state.edict, state.revision + 1, state.draft);
-      return {
-        ...state,
-        revision: draft.revision,
-        draft,
-        phase: 'reviewing',
-        history: pushHistory(
-          state,
-          '中书省',
-          '修订',
-          `第 ${draft.revision} 稿：${draft.notes}`,
-          'neutral',
-        ),
-      };
-    }
-    case 'dispatching': {
-      return {
-        ...state,
-        phase: 'executing',
-        history: pushHistory(
-          state,
-          '尚书省',
-          '接旨',
-          '奉门下省放行文书，六部条陈即日下发：' + state.draft.orders.map((o) => o.name).join('、'),
-          'ok',
-        ),
-      };
-    }
-    case 'executing': {
-      if (state.results.length >= state.draft.orders.length) {
-        return {
-          ...state,
-          phase: 'completed',
-          finishedAt: nowIso(),
-          history: pushHistory(
-            state,
-            '尚书省',
-            '汇总覆命',
-            `六部办结，交付物共 ${state.results.reduce((n, r) => n + r.artifacts.length, 0)} 件，恭呈御览。`,
-            'ok',
-          ),
-        };
-      }
-      const order = state.draft.orders[state.results.length];
-      const result = executeOrder(order, state.edict);
-      const results = state.results.concat([result]);
-      const history = pushHistory(
-        state,
-        order.name,
-        '覆命',
-        `${result.summary}　交付：${result.artifacts.join('、')}`,
-        'ok',
-      );
-      if (results.length >= state.draft.orders.length) {
-        return {
-          ...state,
-          results,
-          phase: 'completed',
-          finishedAt: nowIso(),
-          history: history.concat([
-            {
-              seq: history.length + 1,
-              actor: '尚书省',
-              action: '汇总覆命',
-              detail: `六部办结，交付物共 ${results.reduce((n, r) => n + r.artifacts.length, 0)} 件，恭呈御览。`,
-              tone: 'ok',
-              at: nowIso(),
-            },
-          ]),
-        };
-      }
-      return { ...state, results, history };
-    }
-    default:
-      return state;
-  }
-}
-
-/** 门下省手动朱批（亲批模式）。 */
-function submitReview(state, approved, comment) {
-  if (state.phase !== 'reviewing') return state;
-  const base = reviewDraft(state.draft, false);
-  if (approved) {
-    const review = {
-      ...base,
-      approved: true,
-      issues: [],
-      comment: comment && comment.trim() ? comment.trim() : '准奏。着尚书省即日施行。',
-    };
-    return {
-      ...state,
-      review,
-      phase: 'dispatching',
-      history: pushHistory(state, '门下省', '准奏', review.comment, 'ok'),
-    };
-  }
-  const rejections = state.rejections + 1;
-  const issues =
-    comment && comment.trim()
-      ? [comment.trim()]
-      : base.issues.length
-        ? base.issues
-        : ['着中书省酌改后再奏。'];
-  const review = {
-    ...base,
-    approved: false,
-    issues,
-    comment: `驳回。${issues[0]}`,
-  };
-  let history = pushHistory(
-    state,
-    '门下省',
-    '驳回',
-    review.comment + '　驳议：' + issues.join('；'),
-    'warn',
-  );
-  if (rejections >= state.maxRejections) {
-    const reason = `门下省连驳 ${rejections} 次，依制封还圣旨，直呈御前，着皇帝圣裁后再行。`;
-    history = history.concat([
-      {
-        seq: history.length + 1,
-        actor: '门下省',
-        action: '封还',
-        detail: reason,
-        tone: 'bad',
-        at: nowIso(),
-      },
-    ]);
-    return {
-      ...state,
-      review,
-      rejections,
-      phase: 'escalated',
-      escalationReason: reason,
-      history,
-      finishedAt: nowIso(),
-    };
-  }
-  history = history.concat([
-    {
-      seq: history.length + 1,
-      actor: '门下省',
-      action: '封还重拟',
-      detail: `第 ${rejections} 次驳回，限中书省修订后复奏。`,
-      tone: 'warn',
-      at: nowIso(),
-    },
-  ]);
-  return { ...state, review, rejections, phase: 'revising', history };
-}
-
-/** 全自动跑完一道圣旨（Host 工具与测试使用）。 */
-function runAll(edict, options = {}) {
-  let state = begin(edict, options);
-  for (let guard = 0; guard < 200; guard += 1) {
-    if (state.phase === 'completed' || state.phase === 'escalated') break;
-    state = step(state);
-  }
-  return state;
-}
-
-function summary(state) {
-  if (state.phase === 'escalated') {
-    return `门下省连驳 ${state.rejections} 次，封还圣旨，直呈御前。`;
-  }
-  if (state.phase === 'completed') {
-    return `六部覆命：${state.results.length} 部办结，圣旨已毕。`;
-  }
-  if (state.phase === 'idle') return '静候圣旨。';
-  return `圣旨流转中：${stageLabel(state.phase)}（第 ${Math.max(state.revision, 1)} 稿）。`;
-}
-
-/** 渲染给模型看的纯文本轨迹（Host 工具返回值）。 */
-function renderReport(state) {
-  const lines = [];
-  lines.push('# 三省六部工作流 · dsh-tang-agent');
-  lines.push('');
-  lines.push('圣旨：' + state.edict);
-  lines.push('结局：' + summary(state));
-  lines.push('');
-  lines.push('## 起居注');
-  for (const entry of state.history) {
-    lines.push(`- [${String(entry.seq).padStart(2, '0')}] ${entry.actor} · ${entry.action}：${entry.detail}`);
-  }
-  if (state.draft) {
-    lines.push('');
-    lines.push(`## 中书省第 ${state.draft.revision} 稿`);
-    lines.push(state.draft.summary);
-    for (const order of state.draft.orders) {
-      lines.push(`- ${order.name}（${order.deadline}）：${order.deliverable}`);
-    }
-  }
-  if (state.review) {
-    lines.push('');
-    lines.push('## 门下省朱批');
-    lines.push((state.review.approved ? '【准奏】' : '【驳回】') + state.review.comment);
-    if (state.review.issues.length) {
-      for (const issue of state.review.issues) lines.push('- 驳议：' + issue);
-    }
-  }
-  if (state.results.length) {
-    lines.push('');
-    lines.push('## 六部覆命');
-    for (const result of state.results) {
-      lines.push(`### ${result.name}`);
-      lines.push(result.summary);
-      lines.push('交付：' + result.artifacts.join('、'));
-      const metrics = Object.keys(result.metrics)
-        .map((key) => `${key}=${result.metrics[key]}`)
-        .join('，');
-      if (metrics) lines.push('度支：' + metrics);
-    }
-  }
-  return lines.join('\n');
-}
+const TOOL_MODE_LABELS = {
+  full: '完整朝议',
+  single: '单部直调',
+  quick: '快速问答',
+};
 
 
-const TangEngine = {
-  createState, begin, step, submitReview, runAll, renderReport, summary,
-  stageLabel, hashSeed, MINISTRIES, MINISTRY_ORDER, STAGE_LABELS,
+const CourtMeta = {
+  MINISTRY_ORDER, MINISTRIES, EXTRA_ROLES, ROLE_LABELS, STAGE_LABELS, TOOL_MODE_LABELS,
 };
 
 /**
@@ -727,7 +184,7 @@ const TANG_CSS = `
 
 /* ---------- stage rail ---------- */
 .tda-rail {
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 0;
   margin: 0 0 20px; padding: 12px 8px;
   border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1);
@@ -897,6 +354,39 @@ const TANG_CSS = `
 }
 .tda-sidebar-icon.is-active .tda-sidebar-seal { background: var(--tda-seal); border-color: var(--tda-seal); color: #fff; }
 
+/* ---------- real agents ---------- */
+.tda-agentgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.tda-agent {
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2); padding: 12px 13px; min-width: 0;
+}
+.tda-agent.is-running { border-color: var(--dsw-alias-brand-primary); }
+.tda-agent.is-done { border-color: var(--dsw-alias-state-success-primary); }
+.tda-agent.is-failed { border-color: var(--dsw-alias-state-error-primary); }
+.tda-agent-head { display: flex; align-items: center; gap: 8px; }
+.tda-agent-meta { color: var(--dsw-alias-label-secondary); font-size: 10.5px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tda-agent-stream {
+  margin-top: 8px; padding: 8px 9px; border-radius: 8px;
+  background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary); font-family: var(--tda-serif);
+  font-size: 11.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word;
+  max-height: 132px; overflow: auto;
+}
+.tda-agent-error { margin-top: 6px; color: var(--dsw-alias-state-error-primary); font-size: 11px; word-break: break-word; }
+.tda-tools { margin-top: 9px; display: flex; flex-direction: column; gap: 6px; }
+.tda-tool { border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; padding: 7px 8px; background: var(--dsw-alias-bg-base); }
+.tda-tool-name { font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.tda-tool-args, .tda-tool-result { margin-top: 3px; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--dsw-alias-label-secondary); word-break: break-all; max-height: 88px; overflow: auto; }
+.tda-tool-result { color: var(--dsw-alias-state-success-primary); }
+.tda-tool-result.is-error { color: var(--dsw-alias-state-error-primary); }
+.tda-badge {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px;
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px;
+  font-size: 10px; color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-base); white-space: nowrap;
+}
+.tda-badge-real { color: var(--tda-seal); border-color: var(--tda-seal); font-family: var(--tda-serif); letter-spacing: .08em; }
+
 @keyframes tda-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes tda-stamp { from { opacity: 0; transform: rotate(-24deg) scale(1.35); } to { opacity: .9; transform: rotate(-9deg) scale(1); } }
 @keyframes tda-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
@@ -909,7 +399,7 @@ const TANG_CSS = `
 }
 @media (max-width: 620px) {
   .tda-root { padding: 18px 12px 64px; }
-  .tda-rail { grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 10px 4px; }
+  .tda-rail { grid-template-columns: repeat(6, minmax(0, 1fr)); padding: 10px 4px; }
   .tda-rail-dot { width: 23px; height: 23px; font-size: 11px; }
   .tda-review-wrap { grid-template-columns: 1fr; }
   .tda-order { grid-template-columns: 46px minmax(0, 1fr); }
@@ -1002,273 +492,310 @@ function MinistryGlyph(props) {
 
 
 /**
- * dsh-tang-agent · 侧边栏面板（React，无 JSX）
+ * dsh-tang-agent · 真实多智能体面板
  *
- * 注册两处：
- *   - sidebar.panellist / id=tang  → 左侧栏“唐”字印章入口
- *   - main / key=tang              → 中央“圣旨流转”面板
- *
- * 数据全部来自 engine.js（与 Python graph.py 同构），组件只负责呈现与
- * 推进；不使用任何 Harness Client 包，样式全部走 --dsw-alias-* 令牌。
+ * 侧边栏只做展示与操作：下旨、取消、看阶段、看每个子 Agent 的模型 / 会话 /
+ * 流式文本 / 工具调用 / 审批结果。所有编排都在 Host 的
+ * CourtOrchestrator 中完成，浏览器不跑任何状态机。
  */
 
 const h = React.createElement;
 let tangCtx = null;
 
-const TDA_TEXT = {
+const TEXT = {
   zh: {
     title: '三省六部工作流',
-    subtitle: 'dsh-tang-agent · 圣旨流转',
-    railLabel: '三省六部流转阶段',
-    edictTitle: '皇帝 · 下旨',
-    emperorEn: 'Emperor',
-    placeholder: '朕命……写下要办的事；若有期限、钱粮、禁忌，一并写入。',
-    send: '传旨',
-    demo: '连驳演练',
-    auto: '自动',
-    step: '单步',
-    manual: '亲批',
-    pace: '节奏',
-    slow: '慢',
-    normal: '标准',
-    fast: '快',
-    reset: '重置',
-    copy: '复制起居注',
-    copied: '已复制',
+    subtitle: 'dsh-tang-agent · 真实多智能体',
+    real: '真实子 Agent',
+    edict: '皇帝 · 下旨',
+    placeholder: '写下要办的事；六部会真实派生独立 Agent，并调用文件、终端、扫描、统计等真实工具。',
+    start: '传旨',
+    cancel: '中止',
+    reset: '清空',
+    mode: '模式',
+    full: '完整朝议',
+    single: '单部直调',
+    quick: '快速问答',
+    ministry: '直调部门',
+    rejectLimit: '连驳上限',
     stage: '当前',
+    agentCount: '子 Agent',
     idleTitle: '丹墀静候，圣旨未下',
-    idleBody: '写下圣旨，三省六部即行运转：中书起草、门下朱批、尚书下发、六部覆命。',
-    presetLabel: '样例圣旨',
-    presets: [
-      '着工部于三月内修缮东市水渠，户部拨钱粮，刑部核验工料，吏部考成，礼部告示百姓。',
-      '着兵部整饬北境烽燧，工部修缮关城，户部核拨军资，刑部严查克扣，礼部抚慰边民，吏部考成将官。',
-      '着礼部筹办今岁科考，吏部铨选考官，刑部严防舞弊，工部修缮贡院，户部拨付考资，兵部维持秩序。',
-    ],
-    draftTitle: '中书省 · 草案',
-    draftEn: 'Planner',
-    draftEmpty: '中书省尚未落笔。',
-    revision: '第 {n} 稿',
+    idleBody: '下旨后会真实派生中书、钦天监、门下、尚书与六部 Agent；每个子 Agent 有独立模型会话、独立工具面和真实事件流。',
+    drafting: '中书起草',
+    feasibility: '钦天监勘验',
+    review: '门下朱批',
+    dispatch: '尚书下发',
+    executing: '六部奉行',
+    aggregate: '尚书汇总',
+    agents: '子 Agent 实况',
+    agentEmpty: '尚未派生',
+    model: '模型',
+    session: '会话',
+    stream: '流式输出',
+    tools: '真实工具调用',
+    noTools: '未调用工具',
+    draft: '中书省草案',
     risks: '风险预案',
     acceptance: '验收标准',
-    reviewTitle: '门下省 · 朱批',
-    reviewEn: 'Reviewer',
-    reviewWait: '奏本已呈，恭候朱批。',
+    feasibilityTitle: '钦天监勘验',
+    feasible: '可行',
+    infeasible: '不可行',
+    gaps: '缺口',
+    evidence: '证据',
+    reviewTitle: '门下省朱批',
     approve: '准奏',
     reject: '驳回',
-    rejectPlaceholder: '驳回缘由（留空则由门下省自列驳议）',
-    rejections: '连驳 {n}/{max}',
-    escalation: '连驳三次，封还御前',
-    escalationBody: '门下省依制封还圣旨，不再下发六部。请皇帝改旨，或再下明谕。',
-    dispatchTitle: '尚书省 · 下发',
-    dispatchEn: 'Orchestrator',
-    dispatchBody: '奉门下省放行文书，六部并行办理。',
-    dispatchWait: '候门下省放行。',
-    sixTitle: '六部 · 覆命',
-    sixEn: 'Six Ministries',
-    pending: '候令',
-    done: '已覆命',
+    issues: '驳议',
+    results: '六部覆命',
+    noResults: '尚未覆命',
     audit: '起居注',
-    auditEn: 'Audit',
-    auditEmpty: '尚无记事。',
+    noAudit: '尚无记事。',
     completed: '六部覆命，圣旨已毕',
-    completedBody: '交付物已汇总，恭呈御览。',
-    deliver: '交付',
-    deadline: '限期',
-    metrics: '度支',
-    rail: ['皇帝', '中书省', '门下省', '尚书省', '六部'],
-    stages: {
-      idle: '静候',
-      drafting: '起草',
-      reviewing: '朱批',
-      revising: '修订',
-      dispatching: '下发',
-      executing: '奉行',
-      completed: '覆命',
-      escalated: '封还',
-    },
+    escalated: '连驳达到上限，封还御前',
+    cancelled: '圣旨已中止',
+    failed: '朝议失败',
+    running: '运行中',
+    queued: '候派',
+    done: '已覆命',
+    blocked: '受阻',
+    error: '错误',
+    copy: '复制起居注',
+    copied: '已复制',
+    realBadge: 'REAL',
+    openRun: '恢复上次朝议',
   },
   en: {
     title: 'Three Departments Workflow',
-    subtitle: 'dsh-tang-agent · Edict flow',
-    railLabel: 'Court workflow stages',
-    edictTitle: 'Emperor · Edict',
-    emperorEn: 'Emperor',
-    placeholder: 'Write the edict: what must be done, by when, with what means, and what is forbidden.',
-    send: 'Issue edict',
-    demo: 'Rejection drill',
-    auto: 'Auto',
-    step: 'Step',
-    manual: 'Hand-review',
-    pace: 'Pace',
-    slow: 'Slow',
-    normal: 'Normal',
-    fast: 'Fast',
-    reset: 'Reset',
+    subtitle: 'dsh-tang-agent · real sub-agents',
+    real: 'Real sub-agents',
+    edict: 'Emperor · Edict',
+    placeholder: 'Describe the task; six ministries spawn real agents and call real file / shell / scan / count tools.',
+    start: 'Issue edict',
+    cancel: 'Cancel',
+    reset: 'Clear',
+    mode: 'Mode',
+    full: 'Full court',
+    single: 'Single ministry',
+    quick: 'Quick answer',
+    ministry: 'Ministry',
+    rejectLimit: 'Rejection limit',
+    stage: 'Stage',
+    agentCount: 'Agents',
+    idleTitle: 'The throne awaits an edict',
+    idleBody: 'Issuing an edict spawns Zhongshu, the Observatory, Menxia, Shangshu and six ministry agents, each with its own model session and real tools.',
+    drafting: 'Drafting',
+    feasibility: 'Feasibility',
+    review: 'Review',
+    dispatch: 'Dispatch',
+    executing: 'Executing',
+    aggregate: 'Aggregate',
+    agents: 'Agent activity',
+    agentEmpty: 'No agents yet',
+    model: 'Model',
+    session: 'Session',
+    stream: 'Stream',
+    tools: 'Real tool calls',
+    noTools: 'No tool calls',
+    draft: 'Zhongshu draft',
+    risks: 'Risks',
+    acceptance: 'Acceptance',
+    feasibilityTitle: 'Observatory check',
+    feasible: 'Feasible',
+    infeasible: 'Infeasible',
+    gaps: 'Gaps',
+    evidence: 'Evidence',
+    reviewTitle: 'Menxia verdict',
+    approve: 'Approved',
+    reject: 'Rejected',
+    issues: 'Issues',
+    results: 'Ministry reports',
+    noResults: 'No reports yet',
+    audit: 'Audit trail',
+    noAudit: 'No entries yet.',
+    completed: 'All six ministries reported',
+    escalated: 'Rejection limit reached — returned to the throne',
+    cancelled: 'Run cancelled',
+    failed: 'Court failed',
+    running: 'Running',
+    queued: 'Queued',
+    done: 'Done',
+    blocked: 'Blocked',
+    error: 'Error',
     copy: 'Copy audit trail',
     copied: 'Copied',
-    stage: 'Stage',
-    idleTitle: 'The throne awaits an edict',
-    idleBody: 'Issue an edict and the court moves: Zhongshu drafts, Menxia reviews, Shangshu dispatches, the Six Ministries report.',
-    presetLabel: 'Sample edicts',
-    presets: [
-      'Repair the East Market canal within three months: Works builds, Revenue funds, Justice audits materials, Personnel appraises, Rites informs the people.',
-      'Fortify the northern beacon line: War musters, Works repairs the pass, Revenue allocates, Justice probes graft, Rites comforts the frontier, Personnel evaluates officers.',
-      'Hold this year’s imperial examination: Rites organizes, Personnel selects examiners, Justice prevents fraud, Works repairs the hall, Revenue funds, War keeps order.',
-    ],
-    draftTitle: 'Zhongshu · Draft',
-    draftEn: 'Planner',
-    draftEmpty: 'Zhongshu has not drafted yet.',
-    revision: 'Draft {n}',
-    risks: 'Risk register',
-    acceptance: 'Acceptance criteria',
-    reviewTitle: 'Menxia · Review',
-    reviewEn: 'Reviewer',
-    reviewWait: 'The draft is submitted, awaiting the vermilion verdict.',
-    approve: 'Approve',
-    reject: 'Reject',
-    rejectPlaceholder: 'Reason for rejection (leave blank to let Menxia list its own findings)',
-    rejections: 'Rejections {n}/{max}',
-    escalation: 'Three rejections: returned to the throne',
-    escalationBody: 'Menxia has sealed the edict and halted dispatch. The Emperor must revise it or issue a new decree.',
-    dispatchTitle: 'Shangshu · Dispatch',
-    dispatchEn: 'Orchestrator',
-    dispatchBody: 'With Menxia’s approval, all six ministries proceed in parallel.',
-    dispatchWait: 'Awaiting Menxia’s approval.',
-    sixTitle: 'Six Ministries · Reports',
-    sixEn: 'Execution',
-    pending: 'Awaiting orders',
-    done: 'Reported',
-    audit: 'Audit trail',
-    auditEn: 'Chronicle',
-    auditEmpty: 'No entries yet.',
-    completed: 'All six ministries reported — the edict is complete',
-    completedBody: 'Deliverables are consolidated for the throne.',
-    deliver: 'Deliverables',
-    deadline: 'Deadline',
-    metrics: 'Metrics',
-    rail: ['Emperor', 'Zhongshu', 'Menxia', 'Shangshu', 'Six Ministries'],
-    stages: {
-      idle: 'Idle',
-      drafting: 'Drafting',
-      reviewing: 'Review',
-      revising: 'Revising',
-      dispatching: 'Dispatch',
-      executing: 'Executing',
-      completed: 'Complete',
-      escalated: 'Escalated',
-    },
+    realBadge: 'REAL',
+    openRun: 'Resume last run',
   },
 };
 
-const TDA_STORAGE_KEY = 'dsh-tang-agent:last-edict';
-const TDA_SAMPLE_EDICT = TDA_TEXT.zh.presets[0];
+const STORAGE_KEY = 'dsh-tang-agent:last-run';
 
-function tdaLoadEdict() {
-  try {
-    return window.localStorage.getItem(TDA_STORAGE_KEY) || '';
-  } catch (error) {
-    return '';
-  }
-}
-
-function tdaStoreEdict(value) {
-  try {
-    window.localStorage.setItem(TDA_STORAGE_KEY, value);
-  } catch (error) {
-    /* 隐私模式或存储配额不足时静默降级 */
-  }
-}
-
-function tdaCopyFallback(value, done) {
-  try {
-    const area = document.createElement('textarea');
-    area.value = value;
-    area.setAttribute('readonly', 'readonly');
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand('copy');
-    document.body.removeChild(area);
-    done();
-  } catch (error) {
-    /* 复制失败不阻断主流程 */
-  }
-}
-
-function tdaUseLang() {
-  const locale =
-    tangCtx && typeof tangCtx.get === 'function' ? tangCtx.get('locale') : undefined;
-  const [, forceRender] = React.useState(0);
+function useLang() {
+  const locale = tangCtx && tangCtx.get ? tangCtx.get('locale') : undefined;
+  const [, force] = React.useState(0);
   React.useEffect(() => {
     if (!locale || typeof locale.subscribe !== 'function') return undefined;
-    const off = locale.subscribe(() => forceRender((n) => n + 1));
+    const off = locale.subscribe(() => force((n) => n + 1));
     return () => {
       if (typeof off === 'function') off();
     };
   }, [locale]);
   let active = 'zh';
   try {
-    if (locale && typeof locale.getLocale === 'function') {
-      active = (locale.getLocale() || {}).active || 'zh';
-    }
-  } catch (error) {
+    if (locale && typeof locale.getLocale === 'function') active = (locale.getLocale() || {}).active || 'zh';
+  } catch {
     active = 'zh';
   }
   return String(active).toLowerCase().slice(0, 2) === 'zh' ? 'zh' : 'en';
 }
 
-function tdaClock(iso) {
-  try {
-    return new Date(iso).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  } catch (error) {
-    return String(iso || '').slice(11, 19);
-  }
-}
-
-function tdaFormat(template, values) {
-  let output = String(template);
-  Object.keys(values || {}).forEach((key) => {
-    output = output.split('{' + key + '}').join(String(values[key]));
+function useRun() {
+  const [runId, setRunId] = React.useState(() => {
+    try {
+      return window.localStorage.getItem(STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
   });
-  return output;
+  const [run, setRun] = React.useState(null);
+  const [error, setError] = React.useState('');
+  const timer = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!runId) return undefined;
+    let stopped = false;
+    let source;
+    let pollTimer;
+
+    const poll = () => {
+      if (stopped) return;
+      fetch(`/api/tang/runs/${encodeURIComponent(runId)}`)
+        .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+        .then((payload) => {
+          setRun(payload);
+          if (payload.status !== 'running') stopped = true;
+        })
+        .catch((reason) => setError(String(reason.message || reason)))
+        .finally(() => {
+          if (!stopped) pollTimer = setTimeout(poll, 1_200);
+        });
+    };
+
+    try {
+      source = new EventSource(`/api/tang/runs/${encodeURIComponent(runId)}/stream`);
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          setRun(payload);
+          setError('');
+          if (payload.status !== 'running' && source) source.close();
+        } catch {
+          /* ignore malformed frame */
+        }
+      };
+      source.onerror = () => {
+        if (source) source.close();
+        poll();
+      };
+    } catch {
+      poll();
+    }
+
+    return () => {
+      stopped = true;
+      if (source) source.close();
+      if (pollTimer) clearTimeout(pollTimer);
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [runId]);
+
+  const remember = (id) => {
+    setRunId(id);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const start = async (body) => {
+    setError('');
+    try {
+      const response = await fetch('/api/tang/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-tang-ui': '1' },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      remember(payload.runId);
+      setRun(null);
+    } catch (reason) {
+      setError(String(reason.message || reason));
+    }
+  };
+
+  const cancel = async () => {
+    if (!runId) return;
+    try {
+      await fetch(`/api/tang/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: 'POST',
+        headers: { 'x-tang-ui': '1' },
+      });
+    } catch (reason) {
+      setError(String(reason.message || reason));
+    }
+  };
+
+  const clear = () => {
+    setRunId('');
+    setRun(null);
+    setError('');
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return { runId, run, error, start, cancel, clear, resume: () => setRunId((id) => id) };
 }
 
-function StageRail(props) {
-  const phase = props.phase;
-  const t = props.t;
-  const indexes = {
-    idle: -1,
-    drafting: 1,
-    revising: 1,
-    reviewing: 2,
-    dispatching: 3,
-    executing: 4,
-    completed: 5,
-    escalated: 2,
-  };
-  const index = typeof indexes[phase] === 'number' ? indexes[phase] : -1;
+const STAGE_INDEX = {
+  idle: -1,
+  drafting: 1,
+  revising: 1,
+  feasibility: 2,
+  reviewing: 3,
+  dispatching: 4,
+  executing: 5,
+  aggregating: 5,
+  completed: 6,
+  escalated: 3,
+  single: 5,
+  quick: 1,
+  cancelled: -1,
+  failed: -1,
+};
+
+const ROLE_ORDER = ['zhongshu', 'qintianjian', 'menxia', 'shangshu', 'works', 'justice', 'war', 'rites', 'revenue', 'personnel'];
+
+function Rail({ phase, t }) {
+  const labels = [t.stage === 'Stage' ? 'Emperor' : '皇帝', '中书省', '钦天监', '门下省', '尚书省', '六部'];
+  const index = STAGE_INDEX[phase] ?? -1;
   return h(
     'div',
-    { className: 'tda-rail', role: 'list', 'aria-label': t.railLabel },
-    t.rail.map((label, step) => {
+    { className: 'tda-rail', role: 'list', 'aria-label': 'court stages' },
+    labels.map((label, step) => {
       let status = 'pending';
-      if (phase === 'escalated' && step === 2) status = 'error';
+      if (phase === 'escalated' && step === 3) status = 'error';
+      else if (phase === 'failed' && step === 5) status = 'error';
       else if (index > step) status = 'done';
       else if (index === step) status = 'active';
       return h(
         'div',
-        {
-          key: label,
-          className: 'tda-rail-node is-' + status,
-          role: 'listitem',
-          'aria-current': status === 'active' ? 'step' : undefined,
-        },
+        { key: label, className: 'tda-rail-node is-' + status, role: 'listitem' },
         h('span', { className: 'tda-rail-dot' }, String(step + 1)),
         h('span', { className: 'tda-rail-label' }, label),
       );
@@ -1276,31 +803,87 @@ function StageRail(props) {
   );
 }
 
-function SectionHead(props) {
+function Head({ title, en, right }) {
   return h(
     'div',
     { className: 'tda-card-head' },
-    h(
-      'span',
-      { className: 'tda-eyebrow' },
-      props.title,
-      h('small', null, props.en || ''),
-    ),
-    props.right || null,
+    h('span', { className: 'tda-eyebrow' }, title, h('small', null, en || '')),
+    right || null,
   );
 }
 
-function DraftCard(props) {
-  const draft = props.draft;
-  const t = props.t;
+function AgentGrid({ run, t }) {
+  const agents = run?.agents ? Object.values(run.agents) : [];
+  const ordered = agents.sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
   return h(
     'section',
-    { className: 'tda-card', 'aria-label': t.draftTitle },
-    h(SectionHead, {
-      title: t.draftTitle,
-      en: t.draftEn,
-      right: h('span', { className: 'tda-counter' }, tdaFormat(t.revision, { n: draft.revision })),
+    { className: 'tda-card' },
+    h(Head, {
+      title: t.agents,
+      en: `${t.agentCount} ${run?.agentCount || 0}`,
+      right: h('span', { className: 'tda-badge tda-badge-real' }, t.realBadge),
     }),
+    ordered.length === 0
+      ? h('p', { className: 'tda-pending' }, t.agentEmpty)
+      : h(
+          'div',
+          { className: 'tda-agentgrid' },
+          ordered.map((agent) =>
+            h(
+              'article',
+              { key: agent.role, className: 'tda-agent is-' + (agent.status || 'queued') },
+              h(
+                'div',
+                { className: 'tda-agent-head' },
+                h('span', { className: 'tda-glyph' }, (CourtMeta.MINISTRIES[agent.role] || CourtMeta.EXTRA_ROLES[agent.role] || {}).glyph || '臣'),
+                h(
+                  'div',
+                  { style: { minWidth: 0 } },
+                  h('div', { className: 'tda-ministry-name' }, agent.name),
+                  h('div', { className: 'tda-agent-meta' }, `${t.model}: ${agent.model || 'default'}`),
+                ),
+                h('span', { className: 'tda-badge' }, agent.status || 'queued'),
+              ),
+              agent.sessionId
+                ? h('div', { className: 'tda-agent-meta' }, `${t.session}: ${agent.sessionId.slice(0, 8)}`)
+                : null,
+              h(
+                'div',
+                { className: 'tda-agent-stream' },
+                (agent.stream || agent.text || '').slice(-1200) || t.stream + '…',
+              ),
+              agent.error ? h('div', { className: 'tda-agent-error' }, agent.error) : null,
+              h(
+                'div',
+                { className: 'tda-tools' },
+                (agent.toolCalls || []).length === 0
+                  ? h('span', { className: 'tda-pending' }, t.noTools)
+                  : (agent.toolCalls || []).map((call, index) =>
+                      h(
+                        'div',
+                        { className: 'tda-tool', key: call.name + index },
+                        h('div', { className: 'tda-tool-name' }, '⚙ ' + call.name),
+                        h('div', { className: 'tda-tool-args' }, JSON.stringify(call.args)),
+                        h(
+                          'div',
+                          { className: 'tda-tool-result' + (call.error ? ' is-error' : '') },
+                          call.error || call.result || '…',
+                        ),
+                      ),
+                    ),
+              ),
+            ),
+          ),
+        ),
+  );
+}
+
+function DraftCard({ draft, t }) {
+  if (!draft) return null;
+  return h(
+    'section',
+    { className: 'tda-card' },
+    h(Head, { title: t.draft, en: 'Draft ' + draft.revision, right: h('span', { className: 'tda-counter' }, `${draft.orders.length} 部`) }),
     h('p', { className: 'tda-summary' }, draft.summary),
     h(
       'div',
@@ -1315,292 +898,122 @@ function DraftCard(props) {
         ),
       ),
     ),
-    draft.risks.length
-      ? h(
-          'div',
-          null,
-          h('div', { className: 'tda-note' }, t.risks),
-          h(
-            'ul',
-            { className: 'tda-list' },
-            draft.risks.map((risk, i) => h('li', { key: 'risk-' + i }, risk)),
-          ),
-        )
+    draft.risks?.length
+      ? h('div', null, h('div', { className: 'tda-note' }, t.risks), h('ul', { className: 'tda-list' }, draft.risks.map((item, i) => h('li', { key: i }, item))))
       : null,
-    draft.acceptance.length
-      ? h(
-          'div',
-          null,
-          h('div', { className: 'tda-note' }, t.acceptance),
-          h(
-            'ul',
-            { className: 'tda-list' },
-            draft.acceptance.map((item, i) => h('li', { key: 'acc-' + i }, item)),
-          ),
-        )
+    draft.acceptance?.length
+      ? h('div', null, h('div', { className: 'tda-note' }, t.acceptance), h('ul', { className: 'tda-list' }, draft.acceptance.map((item, i) => h('li', { key: i }, item))))
       : null,
   );
 }
 
-function ReviewCard(props) {
-  const t = props.t;
-  const state = props.state;
-  const review = state.review;
-  const pendingManual = props.manual && state.phase === 'reviewing';
-  if (!review && !pendingManual) return null;
-
-  const rejected = Boolean(review && !review.approved);
-  const stampText = review ? (review.approved ? '准' : '驳') : '待';
-  const comment = review
-    ? review.comment
-    : t.reviewWait;
-  const issues = review && review.issues ? review.issues : [];
-
+function FeasibilityCard({ feasibility, t }) {
+  if (!feasibility) return null;
   return h(
     'section',
-    {
-      className:
-        'tda-card ' + (review ? (rejected ? 'is-bad' : 'is-ok') : ''),
-      'aria-label': t.reviewTitle,
-    },
-    h(SectionHead, {
-      title: t.reviewTitle,
-      en: t.reviewEn,
-      right: h(
-        'span',
-        { className: 'tda-counter' },
-        tdaFormat(t.rejections, { n: state.rejections, max: state.maxRejections }),
-      ),
+    { className: 'tda-card' + (feasibility.feasible ? ' is-ok' : ' is-bad') },
+    h(Head, {
+      title: t.feasibilityTitle,
+      en: 'Observatory',
+      right: h('span', { className: 'tda-badge' }, feasibility.feasible ? t.feasible : t.infeasible),
     }),
+    feasibility.gaps?.length
+      ? h('div', null, h('div', { className: 'tda-note' }, t.gaps), h('ul', { className: 'tda-list' }, feasibility.gaps.map((gap, i) => h('li', { key: i }, gap))))
+      : null,
+    feasibility.evidence?.length
+      ? h('div', null, h('div', { className: 'tda-note' }, t.evidence), h('ul', { className: 'tda-list' }, feasibility.evidence.map((item, i) => h('li', { key: i }, item))))
+      : null,
+  );
+}
+
+function ReviewCard({ review, t }) {
+  if (!review) return null;
+  const rejected = !review.approved;
+  return h(
+    'section',
+    { className: 'tda-card ' + (rejected ? 'is-bad' : 'is-ok') },
+    h(Head, { title: t.reviewTitle, en: 'Menxia' }),
     h(
       'div',
       { className: 'tda-review-wrap' },
-      h(
-        'div',
-        {
-          className:
-            'tda-stamp' + (review && !review.approved ? ' is-bad' : ''),
-          'aria-hidden': 'true',
-        },
-        stampText,
-      ),
+      h('div', { className: 'tda-stamp' + (rejected ? ' is-bad' : '') }, rejected ? '驳' : '准'),
       h(
         'div',
         null,
-        h('p', { className: 'tda-summary' }, comment),
-        issues.length
-          ? h(
-              'ul',
-              { className: 'tda-list' },
-              issues.map((issue, i) => h('li', { key: 'issue-' + i }, issue)),
-            )
+        h('p', { className: 'tda-summary' }, review.comment),
+        review.issues?.length
+          ? h('div', null, h('div', { className: 'tda-note' }, t.issues), h('ul', { className: 'tda-list' }, review.issues.map((issue, i) => h('li', { key: i }, issue))))
           : null,
-        pendingManual
-          ? h(
-              'div',
-              { className: 'tda-review-actions' },
-              h('input', {
-                className: 'tda-input',
-                type: 'text',
-                value: props.note,
-                placeholder: t.rejectPlaceholder,
-                onChange: (event) => props.onNote(event.target.value),
-                'aria-label': t.rejectPlaceholder,
-              }),
+      ),
+    ),
+  );
+}
+
+function Results({ run, t }) {
+  const results = run?.results || [];
+  return h(
+    'section',
+    { className: 'tda-card' },
+    h(Head, { title: t.results, en: `${results.length} / 6` }),
+    results.length === 0
+      ? h('p', { className: 'tda-pending' }, t.noResults)
+      : h(
+          'div',
+          { className: 'tda-ministries' },
+          results.map((result) =>
+            h(
+              'article',
+              { className: 'tda-ministry' + (result.status === 'done' ? ' is-done' : ''), key: result.ministry },
               h(
                 'div',
-                { className: 'tda-review-actions' },
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'tda-btn tda-btn-seal',
-                    onClick: props.onApprove,
-                  },
-                  t.approve,
-                ),
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'tda-btn tda-btn-danger',
-                    onClick: props.onReject,
-                  },
-                  t.reject,
-                ),
+                { className: 'tda-ministry-head' },
+                h('span', { className: 'tda-glyph' }, (CourtMeta.MINISTRIES[result.ministry] || {}).glyph || '部'),
+                h('div', null, h('div', { className: 'tda-ministry-name' }, result.name), h('div', { className: 'tda-ministry-en' }, result.status)),
               ),
-            )
-          : null,
-      ),
-    ),
-  );
-}
-
-function DispatchCard(props) {
-  const t = props.t;
-  const state = props.state;
-  return h(
-    'section',
-    { className: 'tda-card is-flat', 'aria-label': t.dispatchTitle },
-    h(SectionHead, {
-      title: t.dispatchTitle,
-      en: t.dispatchEn,
-      right: h(
-        'span',
-        { className: 'tda-counter' },
-        state.draft ? state.draft.orders.length + ' / 6' : '',
-      ),
-    }),
-    h('p', { className: 'tda-summary' }, t.dispatchBody),
-    h(
-      'div',
-      { className: 'tda-kpis', style: { marginTop: '10px' } },
-      (state.draft ? state.draft.orders : []).map((order) =>
-        h(
-          'span',
-          { className: 'tda-kpi', key: 'dispatch-' + order.ministry },
-          h('b', null, order.name),
-          ' · ',
-          order.deadline,
-        ),
-      ),
-    ),
-  );
-}
-
-function MinistryGrid(props) {
-  const t = props.t;
-  const state = props.state;
-  const orders = state.draft ? state.draft.orders : [];
-  return h(
-    'section',
-    { 'aria-label': t.sixTitle },
-    h(SectionHead, {
-      title: t.sixTitle,
-      en: t.sixEn,
-      right: h('span', { className: 'tda-counter' }, state.results.length + ' / 6'),
-    }),
-    h(
-      'div',
-      { className: 'tda-ministries' },
-      TangEngine.MINISTRY_ORDER.map((key) => {
-        const meta = TangEngine.MINISTRIES[key];
-        const order = orders.find((item) => item.ministry === key);
-        const result = state.results.find((item) => item.ministry === key);
-        const next = orders[state.results.length];
-        const isActive =
-          state.phase === 'executing' && !result && next && next.ministry === key;
-        return h(
-          'article',
-          {
-            key,
-            className:
-              'tda-ministry' + (result ? ' is-done' : '') + (isActive ? ' is-active' : ''),
-          },
-          h(
-            'div',
-            { className: 'tda-ministry-head' },
-            h(MinistryGlyph, { id: key }),
-            h(
-              'div',
-              null,
-              h('div', { className: 'tda-ministry-name' }, meta.name),
-              h('div', { className: 'tda-ministry-en' }, meta.en),
-            ),
-          ),
-          h('p', { className: 'tda-ministry-duty' }, meta.duty),
-          h(
-            'div',
-            { className: 'tda-ministry-body' },
-            result
-              ? h('div', null, result.summary)
-              : h(
-                  'div',
-                  { className: 'tda-pending' },
-                  order ? order.objective : t.pending,
-                ),
-          ),
-          result
-            ? h(
+              h('p', { className: 'tda-ministry-duty' }, result.summary),
+              h('ul', { className: 'tda-list' }, (result.artifacts || []).map((item, i) => h('li', { key: i }, item))),
+              h(
                 'div',
                 { className: 'tda-kpis' },
-                Object.keys(result.metrics).map((metric) =>
-                  h(
-                    'span',
-                    { className: 'tda-kpi', key: metric },
-                    metric,
-                    ' ',
-                    h('b', null, result.metrics[metric]),
-                  ),
+                Object.keys(result.metrics || {}).map((key) =>
+                  h('span', { className: 'tda-kpi', key }, key, ' ', h('b', null, result.metrics[key])),
                 ),
-              )
-            : null,
-          result
-            ? h(
-                'ul',
-                { className: 'tda-list' },
-                result.artifacts.map((artifact, i) =>
-                  h('li', { key: 'artifact-' + i }, artifact),
-                ),
-              )
-            : null,
-        );
-      }),
-    ),
+              ),
+            ),
+          ),
+        ),
   );
 }
 
-function AuditRail(props) {
-  const t = props.t;
-  const history = props.history;
-  const listRef = React.useRef(null);
+function Audit({ history, t }) {
+  const ref = React.useRef(null);
   React.useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [history.length]);
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [history?.length]);
   return h(
     'aside',
-    { className: 'tda-audit', 'aria-label': t.audit },
+    { className: 'tda-audit' },
     h(
       'div',
       { className: 'tda-audit-head' },
-      h(
-        'span',
-        { className: 'tda-eyebrow' },
-        t.audit,
-        h('small', null, t.auditEn),
-      ),
-      h('span', { className: 'tda-counter' }, String(history.length)),
+      h('span', { className: 'tda-eyebrow' }, t.audit, h('small', null, 'Audit')),
+      h('span', { className: 'tda-counter' }, String(history?.length || 0)),
     ),
-    history.length === 0
-      ? h(
-          'p',
-          { className: 'tda-audit-empty tda-muted tda-small', style: { padding: '12px 14px' } },
-          t.auditEmpty,
-        )
+    !history?.length
+      ? h('p', { className: 'tda-muted tda-small', style: { padding: '12px 14px' } }, t.noAudit)
       : h(
           'ul',
-          { className: 'tda-audit-list', ref: listRef },
+          { className: 'tda-audit-list', ref },
           history.map((entry) =>
             h(
               'li',
-              {
-                key: entry.seq,
-                className:
-                  'tda-audit-item' +
-                  (entry.tone === 'ok'
-                    ? ' is-ok'
-                    : entry.tone === 'warn'
-                      ? ' is-warn'
-                      : entry.tone === 'bad'
-                        ? ' is-bad'
-                        : ''),
-              },
+              { key: entry.seq, className: 'tda-audit-item is-' + (entry.tone || 'neutral') },
               h(
                 'div',
                 { className: 'tda-audit-meta' },
                 h('span', { className: 'tda-audit-actor' }, entry.actor),
-                h('span', { className: 'tda-audit-action' }, entry.action),
-                h('span', null, tdaClock(entry.at)),
+                h('span', null, entry.action),
+                h('span', null, entry.at ? new Date(entry.at).toLocaleTimeString([], { hour12: false }) : ''),
               ),
               h('p', { className: 'tda-audit-detail' }, entry.detail),
             ),
@@ -1609,110 +1022,74 @@ function AuditRail(props) {
   );
 }
 
-function Banner(props) {
-  return h(
-    'div',
-    { className: 'tda-banner is-' + props.tone, role: 'status' },
-    h('span', { className: 'tda-banner-seal' }, props.seal),
-    h('div', null, h('h3', null, props.title), h('p', null, props.body)),
-  );
+function Banner({ run, t }) {
+  if (!run) return null;
+  if (run.status === 'failed') {
+    return h('div', { className: 'tda-banner is-bad' }, h('span', { className: 'tda-banner-seal' }, '!'), h('div', null, h('h3', null, t.failed), h('p', null, run.error || '')));
+  }
+  if (run.status === 'cancelled') {
+    return h('div', { className: 'tda-banner is-bad' }, h('span', { className: 'tda-banner-seal' }, '止'), h('div', null, h('h3', null, t.cancelled), h('p', null, run.summary || '')));
+  }
+  if (run.status === 'escalated') {
+    return h('div', { className: 'tda-banner is-bad' }, h('span', { className: 'tda-banner-seal' }, '驳'), h('div', null, h('h3', null, t.escalated), h('p', null, run.summary || '')));
+  }
+  if (run.status === 'completed') {
+    return h('div', { className: 'tda-banner is-ok' }, h('span', { className: 'tda-banner-seal' }, '准'), h('div', null, h('h3', null, t.completed), h('p', null, run.summary || '')));
+  }
+  return null;
 }
 
-function TangPanel(props) {
-  const lang = tdaUseLang();
-  const t = TDA_TEXT[lang];
-  const [text, setText] = React.useState(tdaLoadEdict);
-  const [state, setState] = React.useState(() =>
-    props && props.initialState ? props.initialState : TangEngine.createState(),
-  );
-  const [auto, setAuto] = React.useState(true);
-  const [manual, setManual] = React.useState(false);
-  const [speed, setSpeed] = React.useState(620);
-  const [note, setNote] = React.useState('');
-  const [copied, setCopied] = React.useState(false);
-  const copiedTimer = React.useRef(null);
-
-  React.useEffect(
-    () => () => {
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
-    },
-    [],
-  );
-
-  const busy =
-    state.phase === 'drafting' ||
-    state.phase === 'reviewing' ||
-    state.phase === 'revising' ||
-    state.phase === 'dispatching' ||
-    state.phase === 'executing';
-
-  React.useEffect(() => {
-    if (state.phase === 'idle' || state.phase === 'completed' || state.phase === 'escalated') {
-      return undefined;
+function TangPanel() {
+  const lang = useLang();
+  const t = TEXT[lang];
+  const { runId, run, error, start, cancel, clear } = useRun();
+  const [text, setText] = React.useState(() => {
+    try {
+      return window.localStorage.getItem('dsh-tang-agent:edict') || '';
+    } catch {
+      return '';
     }
-    if (!auto) return undefined;
-    if (manual && state.phase === 'reviewing') return undefined;
-    const timer = setTimeout(() => {
-      setState((previous) => TangEngine.step(previous));
-    }, speed);
-    return () => clearTimeout(timer);
-  }, [state, auto, manual, speed]);
+  });
+  const [mode, setMode] = React.useState('full');
+  const [ministry, setMinistry] = React.useState('works');
+  const [maxRejections, setMaxRejections] = React.useState(3);
+  const [copied, setCopied] = React.useState(false);
+  const copyTimer = React.useRef(null);
+  const busy = run?.status === 'running';
 
-  const issue = (forceReject) => {
-    const value = String(text || '').trim() || TDA_SAMPLE_EDICT;
-    setText(value);
-    tdaStoreEdict(value);
-    setNote('');
-    setManual(forceReject ? false : manual);
-    setAuto(true);
-    setState(
-      TangEngine.begin(value, {
-        maxRejections: 3,
-        forceReject: Boolean(forceReject),
-      }),
-    );
+  const issue = () => {
+    const value = text.trim();
+    if (!value) return;
+    try {
+      window.localStorage.setItem('dsh-tang-agent:edict', value);
+    } catch {
+      /* ignore */
+    }
+    start({ edict: value, mode, ministry, maxRejections });
   };
 
-  const reset = () => {
-    setState(TangEngine.createState());
-    setNote('');
-  };
-
-  const approve = () => {
-    setState((previous) => TangEngine.submitReview(previous, true, t.approve));
-  };
-
-  const reject = () => {
-    setState((previous) => TangEngine.submitReview(previous, false, note));
-    setNote('');
-  };
-
-  const copyTrace = () => {
-    const value = TangEngine.renderReport(state);
+  const copy = () => {
+    const value = run ? JSON.stringify(run, null, 2) : '';
     const done = () => {
-      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
       setCopied(true);
-      copiedTimer.current = setTimeout(() => setCopied(false), 1600);
+      copyTimer.current = setTimeout(() => setCopied(false), 1600);
     };
     try {
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        navigator.clipboard.writeText(value).then(done, () => tdaCopyFallback(value, done));
-      } else {
-        tdaCopyFallback(value, done);
-      }
-    } catch (error) {
-      tdaCopyFallback(value, done);
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(value).then(done, done);
+      else done();
+    } catch {
+      done();
     }
   };
 
-  const dotClass = busy
-    ? 'is-live'
-    : state.phase === 'completed'
-      ? 'is-ok'
-      : state.phase === 'escalated'
-        ? 'is-bad'
-        : '';
-  const stageName = t.stages[state.phase] || state.phase;
+  const stats = run
+    ? [
+        `${t.agentCount} ${run.agentCount || 0}`,
+        `${run.rejections || 0}/${run.maxRejections || 3}`,
+        run.mode,
+      ]
+    : [];
 
   return h(
     'div',
@@ -1727,49 +1104,31 @@ function TangPanel(props) {
           'div',
           { className: 'tda-brand' },
           h(TangSeal, { size: 46 }),
-          h(
-            'div',
-            null,
-            h('h1', null, t.title),
-            h('p', null, t.subtitle),
-          ),
+          h('div', null, h('h1', null, t.title), h('p', null, t.subtitle)),
         ),
         h(
           'div',
           { className: 'tda-head-actions' },
-          h(
-            'span',
-            { className: 'tda-stage-pill' },
-            h('span', { className: 'tda-dot ' + dotClass }),
-            h('span', null, t.stage + ' · ' + stageName),
-          ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'tda-btn tda-btn-ghost',
-              onClick: copyTrace,
-            },
-            copied ? t.copied : t.copy,
-          ),
+          h('span', { className: 'tda-badge tda-badge-real' }, t.realBadge),
+          run
+            ? h(
+                'span',
+                { className: 'tda-stage-pill' },
+                h('span', { className: 'tda-dot ' + (busy ? 'is-live' : run.status === 'completed' ? 'is-ok' : 'is-bad') }),
+                h('span', null, t.stage + ' · ' + (CourtMeta.STAGE_LABELS[run.phase] || run.phase)),
+              )
+            : null,
+          h('button', { type: 'button', className: 'tda-btn tda-btn-ghost', onClick: copy }, copied ? t.copied : t.copy),
         ),
       ),
 
       h(
         'section',
         { className: 'tda-edict' },
-        h(SectionHead, {
-          title: t.edictTitle,
-          en: t.emperorEn,
-          right: state.revision
-            ? h(
-                'span',
-                { className: 'tda-counter' },
-                tdaFormat(t.revision, { n: state.revision }) +
-                  ' · ' +
-                  tdaFormat(t.rejections, { n: state.rejections, max: state.maxRejections }),
-              )
-            : null,
+        h(Head, {
+          title: t.edict,
+          en: 'Emperor',
+          right: run ? h('span', { className: 'tda-counter' }, stats.join(' · ')) : null,
         }),
         h('textarea', {
           className: 'tda-textarea',
@@ -1777,136 +1136,36 @@ function TangPanel(props) {
           placeholder: t.placeholder,
           onChange: (event) => setText(event.target.value),
           onKeyDown: (event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') issue(false);
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') issue();
           },
-          'aria-label': t.edictTitle,
+          'aria-label': t.edict,
         }),
         h(
           'div',
           { className: 'tda-controls' },
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'tda-btn tda-btn-primary',
-              onClick: () => issue(false),
-            },
-            t.send,
+          h('button', { type: 'button', className: 'tda-btn tda-btn-primary', onClick: issue, disabled: busy }, t.start),
+          busy ? h('button', { type: 'button', className: 'tda-btn tda-btn-danger', onClick: cancel }, t.cancel) : null,
+          h('button', { type: 'button', className: 'tda-btn', onClick: clear }, t.reset),
+          h('select', { className: 'tda-select', value: mode, onChange: (event) => setMode(event.target.value), 'aria-label': t.mode },
+            h('option', { value: 'full' }, t.full),
+            h('option', { value: 'single' }, t.single),
+            h('option', { value: 'quick' }, t.quick),
           ),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'tda-btn',
-              onClick: () => issue(true),
-              title: t.escalation,
-            },
-            t.demo,
-          ),
-          h(
-            'div',
-            { className: 'tda-seg', role: 'group', 'aria-label': t.auto + ' / ' + t.step },
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'tda-btn' + (auto ? ' is-on' : ''),
-                'aria-pressed': auto,
-                onClick: () => setAuto(true),
-              },
-              t.auto,
-            ),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'tda-btn' + (!auto ? ' is-on' : ''),
-                'aria-pressed': !auto,
-                onClick: () => setAuto(false),
-              },
-              t.step,
-            ),
-          ),
-          !auto
-            ? h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'tda-btn',
-                  disabled: manual && state.phase === 'reviewing',
-                  onClick: () => setState((previous) => TangEngine.step(previous)),
-                },
-                '› ' + t.step,
+          mode === 'single'
+            ? h('select', { className: 'tda-select', value: ministry, onChange: (event) => setMinistry(event.target.value), 'aria-label': t.ministry },
+                CourtMeta.MINISTRY_ORDER.map((key) => h('option', { key, value: key }, CourtMeta.MINISTRIES[key].name)),
               )
             : null,
-          h(
-            'label',
-            { className: 'tda-check' },
-            h('input', {
-              type: 'checkbox',
-              checked: manual,
-              onChange: (event) => setManual(event.target.checked),
-            }),
-            t.manual,
-          ),
-          h(
-            'select',
-            {
-              className: 'tda-select',
-              value: speed,
-              onChange: (event) => setSpeed(Number(event.target.value)),
-              'aria-label': t.pace,
-            },
-            h('option', { value: 900 }, t.slow),
-            h('option', { value: 620 }, t.normal),
-            h('option', { value: 380 }, t.fast),
-          ),
-          h(
-            'button',
-            { type: 'button', className: 'tda-btn', onClick: reset },
-            t.reset,
-          ),
-        ),
-        h(
-          'div',
-          { className: 'tda-presets' },
-          h('span', { className: 'tda-counter' }, t.presetLabel),
-          t.presets.map((preset, i) =>
-            h(
-              'button',
-              {
-                key: 'preset-' + i,
-                type: 'button',
-                className: 'tda-chip',
-                onClick: () => {
-                  setText(preset);
-                  tdaStoreEdict(preset);
-                },
-              },
-              preset.slice(0, 14) + (preset.length > 14 ? '…' : ''),
-            ),
+          h('select', { className: 'tda-select', value: maxRejections, onChange: (event) => setMaxRejections(Number(event.target.value)), 'aria-label': t.rejectLimit },
+            h('option', { value: 2 }, '2'),
+            h('option', { value: 3 }, '3'),
           ),
         ),
       ),
 
-      h(StageRail, { phase: state.phase, t }),
-
-      state.phase === 'escalated'
-        ? h(Banner, {
-            tone: 'bad',
-            seal: '驳',
-            title: t.escalation,
-            body: state.escalationReason || t.escalationBody,
-          })
-        : null,
-      state.phase === 'completed'
-        ? h(Banner, {
-            tone: 'ok',
-            seal: '准',
-            title: t.completed,
-            body: t.completedBody,
-          })
-        : null,
+      error ? h('div', { className: 'tda-banner is-bad', style: { marginBottom: 16 } }, h('span', { className: 'tda-banner-seal' }, '!'), h('div', null, h('h3', null, t.error), h('p', null, error))) : null,
+      h(Rail, { phase: run?.phase || 'idle', t }),
+      h(Banner, { run, t }),
 
       h(
         'div',
@@ -1914,39 +1173,16 @@ function TangPanel(props) {
         h(
           'div',
           { className: 'tda-main' },
-          state.phase === 'idle'
-            ? h(
-                'div',
-                { className: 'tda-card' },
-                h(
-                  'div',
-                  { className: 'tda-empty' },
-                  h(TangSeal, { size: 60, mono: true }),
-                  h('h2', null, t.idleTitle),
-                  h('p', null, t.idleBody),
-                ),
-              )
+          !run
+            ? h('div', { className: 'tda-card' }, h('div', { className: 'tda-empty' }, h(TangSeal, { size: 60, mono: true }), h('h2', null, t.idleTitle), h('p', null, t.idleBody)))
             : null,
-          state.draft
-            ? h(DraftCard, { draft: state.draft, t })
-            : null,
-          h(ReviewCard, {
-            state,
-            t,
-            manual,
-            note,
-            onNote: setNote,
-            onApprove: approve,
-            onReject: reject,
-          }),
-          state.phase === 'dispatching' ||
-          state.phase === 'executing' ||
-          state.phase === 'completed'
-            ? h(DispatchCard, { state, t })
-            : null,
-          h(MinistryGrid, { state, t }),
+          h(AgentGrid, { run, t }),
+          h(DraftCard, { draft: run?.draft, t }),
+          h(FeasibilityCard, { feasibility: run?.feasibility, t }),
+          h(ReviewCard, { review: run?.review, t }),
+          h(Results, { run, t }),
         ),
-        h(AuditRail, { history: state.history, t }),
+        h(Audit, { history: run?.history || [], t }),
       ),
     ),
   );
@@ -1957,10 +1193,7 @@ function TangSidebarIcon(props) {
   const active = Boolean(props && props.active);
   return h(
     'div',
-    {
-      className: 'tda-sidebar-icon' + (active ? ' is-active' : ''),
-      title: '三省六部工作流 · dsh-tang-agent',
-    },
+    { className: 'tda-sidebar-icon' + (active ? ' is-active' : ''), title: '三省六部工作流 · dsh-tang-agent' },
     h(
       'span',
       {
@@ -1975,10 +1208,7 @@ function TangSidebarIcon(props) {
 
 function apply(ctx) {
   tangCtx = ctx;
-
   let disposeStyles = null;
-  // 动态 Cordis runner 会注入 `styles` 全局；以独立 bundle 安装时没有该全局，
-  // 因此保留 <style> 回退并确保两种路径都返回可清理的 disposer。
   const styleService =
     typeof styles !== 'undefined'
       ? styles
@@ -1996,25 +1226,16 @@ function apply(ctx) {
       if (element.parentNode) element.parentNode.removeChild(element);
     };
   }
-  if (disposeStyles && ctx.effect) {
-    ctx.effect(() => disposeStyles, 'dsh-tang-agent: styles');
-  }
+  if (disposeStyles && ctx.effect) ctx.effect(() => disposeStyles, 'dsh-tang-agent: styles');
 
   if (!ctx.slots) return;
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
-      {
-        name: 'sidebar.panellist',
-        id: 'tang',
-        order: 30,
-        label: () => '三省六部工作流',
-      },
+      { name: 'sidebar.panellist', id: 'tang', order: 30, label: () => '三省六部工作流' },
       TangSidebarIcon,
     ),
   );
-  ctx.slots.inject('main', () =>
-    ctx.slots.register({ name: 'main', key: 'tang' }, TangPanel),
-  );
+  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'tang' }, TangPanel));
 }
 
 const inject = ['slots'];
