@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Node / editor
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local artifacts from real court runs
+/tang-artifacts/
+/phase3/

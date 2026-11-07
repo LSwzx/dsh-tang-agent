@@ -135,6 +135,8 @@ class TangCourtDraftTest(unittest.TestCase):
             self.assertTrue(order.deliverable)
             self.assertGreaterEqual(len(order.tools), 2)
             self.assertTrue(order.deadline)
+        self.assertEqual(draft.orders[0].wave, 1)
+        self.assertTrue(all(order.wave == 2 for order in draft.orders[1:]))
 
         # 初稿刻意缺风险与验收，复稿补齐。
         self.assertEqual(draft.risks, [])

@@ -126,6 +126,16 @@ export function registerRoutes(ctx, orchestrator) {
           return;
         }
 
+        const approvalMatch = path.match(/^\/api\/tang\/approvals\/([^/]+)$/);
+        if (method === 'POST' && approvalMatch) {
+          if (!requireUi(req, res)) return;
+          const body = await readJson(req);
+          const decision = body.decision === 'allow' ? 'allow' : 'deny';
+          const ok = orchestrator.decideApproval(decodeURIComponent(approvalMatch[1]), decision);
+          if (!ok) return json(res, 404, { error: '审批请求不存在或已结束。' });
+          return json(res, 200, { ok: true, decision });
+        }
+
         const cancelMatch = path.match(/^\/api\/tang\/runs\/([^/]+)\/cancel$/);
         if (method === 'POST' && cancelMatch) {
           if (!requireUi(req, res)) return;
