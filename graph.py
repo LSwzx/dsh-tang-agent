@@ -481,6 +481,13 @@ def assign_officials(order: MinistryOrder, edict: str, seed: int) -> Dict[str, o
     }
 
 
+def assign_subagent_roles(order: MinistryOrder, edict: str, seed: int) -> Dict[str, object]:
+    return {
+        "artifact": "子 Agent 差遣表（主事/协办/复核）",
+        "metrics": {"差遣": "{n} 员".format(n=3 + seed % 4), "协同": "主事/协办/复核"},
+    }
+
+
 def appraise_merit(order: MinistryOrder, edict: str, seed: int) -> Dict[str, object]:
     return {
         "artifact": "考成法与赏罚尺度",
@@ -494,7 +501,7 @@ MINISTRY_TOOLS: Dict[str, List[Callable[[MinistryOrder, str, int], Dict[str, obj
     "war": [muster_route, schedule_guard],
     "rites": [draft_notice, arrange_rites],
     "revenue": [budget_ledger, audit_grain],
-    "personnel": [assign_officials, appraise_merit],
+    "personnel": [assign_subagent_roles],
 }
 
 

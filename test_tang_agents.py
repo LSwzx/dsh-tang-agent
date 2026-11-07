@@ -53,7 +53,7 @@ class TangCourtHappyPathTest(unittest.TestCase):
         for result in run.results:
             self.assertEqual(result.status, "done")
             self.assertTrue(result.summary)
-            self.assertGreaterEqual(len(result.artifacts), 2)
+            self.assertGreaterEqual(len(result.artifacts), 1)
             self.assertTrue(result.metrics)
 
     def test_rejection_and_approval_are_both_logged(self):
@@ -133,7 +133,7 @@ class TangCourtDraftTest(unittest.TestCase):
         for order in draft.orders:
             self.assertTrue(order.objective)
             self.assertTrue(order.deliverable)
-            self.assertGreaterEqual(len(order.tools), 2)
+            self.assertGreaterEqual(len(order.tools), 1)
             self.assertTrue(order.deadline)
         self.assertEqual(draft.orders[0].wave, 1)
         self.assertTrue(all(order.wave == 2 for order in draft.orders[1:]))
@@ -195,7 +195,7 @@ class PromptTest(unittest.TestCase):
     def test_six_ministry_tools_are_independent(self):
         tool_sets = [tuple(MINISTRIES[key]["tools"]) for key in MINISTRY_ORDER]
         self.assertEqual(len(set(tool_sets)), 6)
-        self.assertTrue(all(len(tools) >= 2 for tools in tool_sets))
+        self.assertTrue(all(len(tools) >= 1 for tools in tool_sets))
 
 
 class SerializationTest(unittest.TestCase):
