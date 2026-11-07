@@ -15,7 +15,8 @@ import { randomUUID } from 'node:crypto';
 
 export function defaultModelOptions(ctx) {
   try {
-    const selection = ctx.agentDefaultModel?.currentSelection?.();
+    const service = ctx.get ? ctx.get('agentDefaultModel') : ctx.agentDefaultModel;
+    const selection = service?.currentSelection?.();
     if (selection && selection.provider && selection.model) {
       return {
         provider: selection.provider,
@@ -31,22 +32,41 @@ export function defaultModelOptions(ctx) {
 
 /**
  * 创建一个只用于承载子 Agent 的父会话（不产生 LLM 调用）。
- * 若创建失败，退回任意 live root，保证 run 仍可进行。
+ * 不再回退到当前会话：每个 run 都有独立父会话，避免上下文污染。
  */
 export async function createRunParent(ctx, { cwd, signal }) {
-  try {
-    const handle = await ctx.agents.createAgent(ctx, {
-      sessionId: randomUUID(),
-      meta: { cwd, origin: 'subagent', delegationDepth: 0 },
-      agentOptions: defaultModelOptions(ctx),
-      signal,
-    });
-    return { agent: handle.agent, handle, owned: true };
-  } catch (error) {
-    const live = ctx.agents.list()[0];
-    if (!live) throw new Error(`无法创建或找到朝议父 Agent：${error.message || error}`);
-    return { agent: live, handle: undefined, owned: false };
+  if (!ctx.agents || typeof ctx.agents.create !== 'function') {
+    throw new Error('DSH agents.create 不可用，无法为朝议创建独立新对话。');
   }
+  let agentPreset;
+  try {
+    const presets = ctx.get ? ctx.get('agentPresets') : undefined;
+    agentPreset = presets && typeof presets.composedPreset === 'function' ? presets.composedPreset(ctx) : undefined;
+    if (!agentPreset) {
+      const roots = typeof ctx.agents.roots === 'function' ? ctx.agents.roots() : [];
+      const sample = roots.find((agent) => agent?.session?.header?.agentPreset);
+      agentPreset = sample?.session?.header?.agentPreset;
+    }
+  } catch {
+    agentPreset = undefined;
+  }
+  const handle = await ctx.agents.create({
+    sessionId: randomUUID(),
+    // 不写 origin:'subagent'，让它成为可出现在工作区会话列表里的新对话；继承当前 preset 以便 spawn 子 Agent。
+    meta: { cwd, ...(agentPreset ? { agentPreset } : {}) },
+    agentOptions: defaultModelOptions(ctx),
+    signal,
+  });
+  try {
+    const registry = ctx.get ? ctx.get('workspaceRegistry') : undefined;
+    const workspace = registry?.list?.().find((item) => item.path === cwd);
+    if (workspace && typeof workspace.attachSession === 'function') {
+      await workspace.attachSession(handle.agent.id);
+    }
+  } catch {
+    /* 工作区挂接失败不影响 run，只是可能不在列表里显示 */
+  }
+  return { agent: handle.agent, handle, owned: true };
 }
 
 function extractOutput(result) {
@@ -83,6 +103,17 @@ export async function runSubagent(ctx, options) {
   const model = defaultModelOptions(ctx);
   let childAgent;
   let activation;
+  let agentPreset;
+  try {
+    const presets = ctx.get ? ctx.get('agentPresets') : undefined;
+    agentPreset = presets && typeof presets.composedPreset === 'function' ? presets.composedPreset(ctx) : undefined;
+    if (!agentPreset) {
+      const roots = typeof ctx.agents.roots === 'function' ? ctx.agents.roots() : [];
+      agentPreset = roots.find((agent) => agent?.session?.header?.agentPreset)?.session?.header?.agentPreset;
+    }
+  } catch {
+    agentPreset = undefined;
+  }
 
   const stopCreated = ctx.on('agent/created', ({ agent }) => {
     if (agent.id !== childId) return;
@@ -149,6 +180,7 @@ export async function runSubagent(ctx, options) {
         parent,
         cwd,
         prompt: [{ type: 'text', text: task }],
+        ...(agentPreset ? { agentPreset } : {}),
         ...(model ? { agentOptions: model } : {}),
       },
       signal,
@@ -160,6 +192,7 @@ export async function runSubagent(ctx, options) {
       childId,
       output,
       stopReason: result.stopReason,
+      diagnostic: result.diagnostic || result.error?.message || '',
       model,
       sessionId: childId,
     };
