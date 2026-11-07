@@ -14,7 +14,7 @@ const MINISTRIES = {
   war: { id: 'war', name: '兵部', en: 'War', glyph: '兵', duty: '调度、终端执行、排期与应急', toolLabel: '终端命令' },
   rites: { id: 'rites', name: '礼部', en: 'Rites', glyph: '礼', duty: '文告、文档、仪注与对外沟通', toolLabel: '文档读取' },
   revenue: { id: 'revenue', name: '户部', en: 'Revenue', glyph: '户', duty: '钱粮、预算、字符与 Token 统计', toolLabel: '字数统计' },
-  personnel: { id: 'personnel', name: '吏部', en: 'Personnel', glyph: '吏', duty: '人事、差遣、工具面与考成', toolLabel: '工具盘点' },
+  personnel: { id: 'personnel', name: '吏部', en: 'Personnel', glyph: '吏', duty: '差遣、角色分配与协同关系', toolLabel: '角色分配' },
 };
 
 const EXTRA_ROLES = {

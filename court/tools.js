@@ -223,10 +223,7 @@ export function createMinistryTools(ctx, run, role) {
           const root = await ctx.fs.resolve(run.cwd);
           const target = await resolveInside(ctx, run, args.path);
           const relativePath = relative(ctx.fs.processPath(root), ctx.fs.processPath(target)).replace(/\\/g, '/');
-          const scratch = isScratchPath(relativePath);
-          if (!scratch) {
-            await approve(ctx, run, exec, 'tang_works_write', `工部拟写入 ${target.displayPath}：${args.reason || '交付物'}`);
-          }
+          await approve(ctx, run, exec, 'tang_works_write', `工部拟写入 ${target.displayPath}：${args.reason || '交付物'}`);
           try {
             await mkdir(dirname(ctx.fs.processPath(target)), { recursive: true });
           } catch {
@@ -248,7 +245,8 @@ export function createMinistryTools(ctx, run, role) {
             path: target.displayPath,
             operation: outcome.operation,
             bytes: outcome.after.length,
-            approval: scratch ? 'scratch-exempt (tang-artifacts/)' : 'allowed-once',
+            approval: 'allowed-once',
+            relativePath,
           };
         },
         { timeoutMs: 480_000 },
@@ -284,12 +282,9 @@ export function createMinistryTools(ctx, run, role) {
         },
         async (args, exec) => {
           const command = String(args.command);
-          const safe = isSafeReadonlyCommand(command);
-          if (!safe) {
-            await approve(ctx, run, exec, 'tang_war_run', `兵部拟执行命令：${command}`);
-          }
+          await approve(ctx, run, exec, 'tang_war_run', `兵部拟执行命令：${command}`);
           const result = await runCommand(ctx, run, command, Number(args.timeout_ms) || 30_000, exec.signal);
-          return { ...result, approval: safe ? 'safe-readonly' : 'allowed-once' };
+          return { ...result, approval: 'allowed-once' };
         },
         { timeoutMs: 480_000 },
       ),
@@ -392,14 +387,20 @@ export function createMinistryTools(ctx, run, role) {
   if (role === 'personnel') {
     tools.push(
       defineTool(
-        'tang_personnel_tools',
-        '吏部：列出当前子 Agent 实际可见的工具（名称与描述）。',
+        'tang_personnel_assign',
+        '吏部：把六部条陈分配给具体子 Agent 角色，明确主事与协同关系。',
         { type: 'object', properties: {}, additionalProperties: false },
-        async (_args, exec) => {
-          const schemas = ctx.tools.schemas(exec.agent);
+        async () => {
+          const orders = (run.draft && run.draft.orders) || run.orders || [];
           return {
-            count: schemas.length,
-            tools: schemas.map((schema) => ({ name: schema.name, description: schema.description })),
+            count: orders.length,
+            assignments: orders.map((order) => ({
+              ministry: order.ministry,
+              agentRole: `tang-${order.ministry}`,
+              name: order.name,
+              responsibility: order.deliverable,
+              deadline: order.deadline,
+            })),
           };
         },
         { concurrencySafe: true },
@@ -474,7 +475,7 @@ export const MINISTRY_TOOL_NAMES = {
   war: ['tang_war_run'],
   justice: ['tang_justice_scan'],
   revenue: ['tang_revenue_count'],
-  personnel: ['tang_personnel_tools'],
+  personnel: ['tang_personnel_assign'],
   rites: ['tang_rites_doc'],
   qintianjian: ['tang_qintian_probe'],
   zhongshu: [],

@@ -583,7 +583,7 @@ export class CourtOrchestrator {
 
       if (run.status === 'escalated') {
         this.touch(run, true);
-      } else if (run.status !== 'cancelled') {
+      } else if (run.status === 'running') {
         run.status = 'completed';
         run.phase = 'completed';
         run.finishedAt = now();
@@ -606,17 +606,26 @@ export class CourtOrchestrator {
   }
 
   async runFullCourt(run, signal) {
-    const prompts = await loadPrompts();
+    // 先由钦天监勘验能力面，再让中书起草；避免先写出根本做不到的方案。
+    run.phase = 'feasibility';
+    this.touch(run, true);
+    const feasibilityText = await this.callRole(run, 'qintianjian', this.feasibilityTask(run), signal);
+    run.feasibility = normalizeFeasibility(feasibilityText, parseJson(feasibilityText));
+    this.touch(run, true);
+    if (!run.feasibility.feasible) {
+      run.status = 'failed';
+      run.phase = 'failed';
+      run.error = `钦天监勘验不通过：${run.feasibility.gaps.join('；') || '当前能力面不足'}`;
+      run.summary = run.error;
+      run.finishedAt = now();
+      this.log(run, '钦天监', '封还', run.error, 'bad');
+      this.touch(run, true);
+      return;
+    }
+
     run.phase = 'drafting';
     let draft = normalizeDraft(
-      parseJson(
-        await this.callRole(
-          run,
-          'zhongshu',
-          this.draftTask(run),
-          signal,
-        ),
-      ),
+      parseJson(await this.callRole(run, 'zhongshu', this.draftTask(run), signal)),
       run.edict,
       1,
       null,
@@ -626,12 +635,6 @@ export class CourtOrchestrator {
     this.touch(run, true);
 
     for (let attempt = 1; attempt <= run.maxRejections + 1; attempt += 1) {
-      run.phase = 'feasibility';
-      this.touch(run, true);
-      const feasibilityText = await this.callRole(run, 'qintianjian', this.feasibilityTask(run, draft), signal);
-      run.feasibility = normalizeFeasibility(feasibilityText, parseJson(feasibilityText));
-      this.touch(run, true);
-
       run.phase = 'reviewing';
       this.touch(run, true);
       const reviewText = await this.callRole(run, 'menxia', this.reviewTask(run, draft), signal);
@@ -689,8 +692,31 @@ export class CourtOrchestrator {
 
     this.log(run, '尚书省', '第一波', `先派 ${wave1Roles.join('、')} 落盘交付物；其余部等落盘后再读取。`, 'ok');
     const wave1 = await Promise.allSettled(wave1Roles.map(executeRole));
-    const wave1Done = wave1Roles.every((role) => run.agents[role]?.status === 'done');
-    this.log(run, '尚书省', '第一波完成', wave1Done ? '第一波已落盘，进入第二波。' : '第一波未全部成功，第二波仍执行并如实标注缺口。', wave1Done ? 'ok' : 'warn');
+    const toResult = (role, item) =>
+      item && item.status === 'fulfilled'
+        ? item.value
+        : {
+            ministry: role,
+            name: MINISTRIES[role].name,
+            status: 'failed',
+            summary: String(item?.reason?.message || item?.reason || '未执行'),
+            artifacts: [],
+            metrics: {},
+          };
+    const wave1Results = wave1Roles.map((role, index) => toResult(role, wave1[index]));
+    run.results = wave1Results.slice();
+    const wave1Error = wave1Results.find((result) => result.status !== 'done');
+    if (wave1Error) {
+      run.status = 'failed';
+      run.phase = 'failed';
+      run.error = `熔断：第一波 ${wave1Error.name} 未完成（${wave1Error.status}）：${wave1Error.summary}`;
+      run.summary = run.error;
+      run.finishedAt = now();
+      this.log(run, '尚书省', '熔断', run.error + '；不再派第二波，直接呈报皇帝。', 'bad');
+      this.touch(run, true);
+      return;
+    }
+    this.log(run, '尚书省', '第一波完成', '第一波全部落盘，进入第二波。', 'ok');
 
     run.wave = 2;
     this.touch(run, true);
@@ -704,18 +730,18 @@ export class CourtOrchestrator {
     wave2Roles.forEach((role, index) => {
       byRole[role] = wave2[index];
     });
-    run.results = MINISTRY_ORDER.map((role) => {
-      const item = byRole[role];
-      if (item && item.status === 'fulfilled') return item.value;
-      return {
-        ministry: role,
-        name: MINISTRIES[role].name,
-        status: 'failed',
-        summary: String(item?.reason?.message || item?.reason || '未执行'),
-        artifacts: [],
-        metrics: {},
-      };
-    });
+    run.results = MINISTRY_ORDER.map((role) => toResult(role, byRole[role]));
+    const wave2Error = run.results.find((result) => result.status === 'failed');
+    if (wave2Error) {
+      run.status = 'failed';
+      run.phase = 'failed';
+      run.error = `熔断：第二波 ${wave2Error.name} 严重报错：${wave2Error.summary}`;
+      run.summary = run.error;
+      run.finishedAt = now();
+      this.log(run, '尚书省', '熔断', run.error + '；不强行汇总，直接呈报皇帝。', 'bad');
+      this.touch(run, true);
+      return;
+    }
     this.touch(run, true);
 
     run.phase = 'aggregating';
@@ -733,6 +759,8 @@ export class CourtOrchestrator {
     return [
       '【圣旨】',
       run.edict,
+      '【钦天监勘验】',
+      JSON.stringify(run.feasibility || {}, null, 2),
       feedback,
       '【六部 id】',
       MINISTRY_ORDER.map((key) => `${key}=${MINISTRIES[key].name}`).join('，'),
@@ -741,13 +769,13 @@ export class CourtOrchestrator {
     ].join('\n');
   }
 
-  feasibilityTask(run, draft) {
+  feasibilityTask(run) {
     return [
-      '【草案】',
-      JSON.stringify(draft, null, 2),
-      '【任务】调用 tang_qintian_probe 探测当前 Host 的工具与服务，然后核对草案所需能力。',
-      '【重要】六部工具是 scoped 工具，只有对应部子 Agent 可见；你看到的 tools 只代表你自己的工具面。',
-      '请用 probe 返回的 planned_tools 与本草案核对：planned_tools 中列出即视为该部工具已设计；再核对 services 是否可用。',
+      '【圣旨】',
+      run.edict,
+      '【任务】在起草之前，调用 tang_qintian_probe 探测当前 Host 的工具与服务，判断这道圣旨所需能力是否具备。',
+      '【重要】六部 tang_* 是 scoped 工具，只有对应部子 Agent 可见；你看到的 tools 只代表你自己的工具面。',
+      '请用 probe 返回的 planned_tools 与 services 判断；若缺关键能力，feasible 必须为 false 并在 gaps 中写明。',
       '只输出 JSON：{"feasible":true,"gaps":[],"required_tools":[],"fallback":"","evidence":[]}',
     ].join('\n');
   }
@@ -781,7 +809,7 @@ export class CourtOrchestrator {
       `【圣旨】\n${run.edict}`,
       `【本部条陈】\n${JSON.stringify(order, null, 2)}`,
       `【必须使用的工具】\n${meta.name}可用工具：${meta.toolLabel}。请至少调用一次真实工具，拿到结果后再覆命。`,
-      '【边界】tang-artifacts/ 是本次朝议的沙箱，可直接写入；业务路径的写入/命令会触发 DSH 审批。',
+      '【边界】所有真实写入/命令都会进入侧边栏审批节点，必须由人类点击“准奏”后才执行；拒绝或超时即打回。',
       '【输出】只输出 JSON：{"ministry":"' + order.ministry + '","status":"done|blocked","summary":"...","artifacts":["..."],"metrics":{}}',
       '不得编造工具结果；工具失败就在 summary 中写明失败原因。',
     ].join('\n');

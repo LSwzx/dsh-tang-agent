@@ -17,25 +17,33 @@
 
 ```mermaid
 flowchart TD
-    E["皇帝 · 下旨"] --> Z["中书省 · 起草"]
-    Z --> Q["钦天监 · 能力勘验"]
-    Q --> M{"门下省 · 契约审议"}
+    E["皇帝 · 下旨"] --> Q["钦天监 · 能力勘验"]
+    Q -->|不可行| ERR["Error 折子 · 直呈御前"]
+    Q -->|可行| Z["中书省 · 起草"]
+    Z --> M{"门下省 · 契约审议"}
     M -->|驳回 · 未达上限| Z
-    M -->|连驳达到上限| ESC["封还御前"]
-    M -->|准奏| S["尚书省 · 派发"]
-    S -->|第一波| W["工部 · 文件读写 / 落盘"]
-    W -->|落盘完成| S2["尚书省 · 第二波"]
+    M -->|连驳达到上限| ERR
+    M -->|准奏| S["尚书省 · 两波派发"]
+    S -->|第一波| W["工部 · 申请写文件"]
+    W --> A{"人工审批 · 侧边栏"}
+    A -->|准奏| W2["工部落盘"]
+    A -->|拒绝/超时| ERR
+    W2 --> S2["尚书省 · 第二波"]
     S2 --> J["刑部 · 代码扫描"]
-    S2 --> B["兵部 · 终端命令"]
+    S2 --> B["兵部 · 申请执行命令"]
     S2 --> L["礼部 · 文档读取"]
     S2 --> R["户部 · 字数/Token"]
-    S2 --> P["吏部 · 工具盘点"]
-    W --> AGG["尚书省 · 汇总"]
+    S2 --> P["吏部 · 分配子 Agent 角色"]
+    B --> A2{"人工审批 · 侧边栏"}
+    A2 -->|准奏| AGG["尚书省 · 汇总"]
+    A2 -->|拒绝/超时| ERR
     J --> AGG
-    B --> AGG
     L --> AGG
     R --> AGG
     P --> AGG
+    W2 -->|失败| ERR
+    S2 -->|严重报错| ERR
+    ERR --> E
 ```
 
 每个角色都是一个**独立 Agent 实例**（独立 Session、独立 System Prompt、独立工具面），
@@ -59,22 +67,23 @@ flowchart TD
 
 | 部 | 工具 | 实际行为 | 审批 |
 | --- | --- | --- | --- |
-| 工部 | `tang_works_write` / `tang_works_read` | `ctx.fs` 写/读工作区文件 | 业务路径需审批；`tang-artifacts/` 沙箱免审批 |
+| 工部 | `tang_works_write` / `tang_works_read` | `ctx.fs` 写/读工作区文件 | 所有写入都需侧边栏审批 |
 | 刑部 | `tang_justice_scan` | 递归扫描危险模式 + `python -B -m py_compile`（argv 直传，不写 pyc） | 只读，无需审批 |
-| 兵部 | `tang_war_run` | `ctx.subprocess` 执行命令，30s 默认超时 | 精确只读白名单免审批；其余需审批 |
+| 兵部 | `tang_war_run` | `ctx.subprocess` 执行命令，30s 默认超时 | 所有命令都需侧边栏审批 |
 | 户部 | `tang_revenue_count` | 统计字符 / CJK / 拉丁词 / 行数 / 近似 Token | 只读 |
-| 吏部 | `tang_personnel_tools` | `ctx.tools.schemas(agent)` 列当前可见工具 | 只读 |
+| 吏部 | `tang_personnel_assign` | 把六部条陈分配给具体子 Agent 角色 | 只读 |
 | 礼部 | `tang_rites_doc` | 读取文档并提取标题、行数、摘要 | 只读 |
 | 钦天监 | `tang_qintian_probe` | 探测 Host Services、工具面、子 Agent provider、planned_tools | 只读 |
 
 **安全边界**
 
 - 所有文件路径限制在本次 run 的 `cwd` 内；越界直接拒绝。
-- 业务写入/命令优先走插件的侧边栏审批队列（`run.requestApproval()`）：请求进入 pending，用户在侧边栏点击允许/拒绝后才会继续。
+- 所有工部写入、兵部命令都先进入侧边栏审批队列（`run.requestApproval()`）：pending → 人类点击允许/拒绝 → 才执行；拒绝或超时即打回。
 - 若插件审批队列不可用，则回退到 DSH `ctx.approval.request()`；未获 `allowed-once` 一律失败（fail-closed）。
 - 子 Agent 通过 `agent.ctx.tools.restrict` 只保留 `read`；`tang_*` 是 scoped 工具，只注入对应部。
 - 额外 `tools.guard` 禁止子 Agent 再派生 `subagent`，避免递归与越权。
-- `tang-artifacts/` 是演示沙箱，允许免审批落盘；生产业务文件请走侧边栏审批。
+- 第一波工部失败或第二波部门严重报错时，尚书省立即熔断，不再强行汇总，把带 `Error` 的折子直呈皇帝。
+
 
 ---
 
@@ -145,9 +154,9 @@ node scripts/build-client.mjs  # 重建 client.js
 ## 八、已知限制
 
 - 六部已改为**两段式波次**：第一波只派工部落盘；工部完成后第二波才派刑部、兵部、礼部、户部、吏部，户部不会在报告落盘前读取。
-- 审批由插件的 `approval/request` answerer 推到侧边栏；若当前 Host 没有可用 answerer，则业务写入/非白名单命令会被拒绝（fail-closed）。
-- `tang-artifacts/` 是演示沙箱，允许免审批落盘；生产业务文件请走侧边栏审批。
-- Windows 控制台中文编码可能显示为乱码；文件本身为 UTF-8。可用 `-Encoding utf8` 写文件后再读校验。
+- 第一波失败或第二波严重报错时会**熔断**，不再强行汇总，直接生成 Error 折子呈报皇帝。
+- 审批由插件的 `approval/request` answerer 推到侧边栏；拒绝或超时即打回。
+- 兵部命令统一 UTF-8 输出，中文 stdout 不再乱码。
 - 浏览器视觉未截图验证；已做 slot 注册、SSE 接口与 idle 渲染检查。
 
 ---
