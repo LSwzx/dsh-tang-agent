@@ -140,6 +140,7 @@ export class CourtOrchestrator {
     this.runs = new Map();
     this.controllers = new Map();
     this.parents = new Map();
+    this.parentHandles = new Map();
     this.subscribers = new Map();
     this.saveTimers = new Map();
     this.agentRuns = new Map();
@@ -294,6 +295,14 @@ export class CourtOrchestrator {
         /* ignore */
       }
     }
+    for (const handle of this.parentHandles.values()) {
+      try {
+        await handle.dispose();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.parentHandles.clear();
     for (const pending of this.pendingApprovals.values()) {
       try {
         pending.settle('deny');
@@ -445,8 +454,16 @@ export class CourtOrchestrator {
       const agent = run.agents[role];
       agent.sessionId = result.childId;
       agent.text = result.output;
+      agent.result = JSON.stringify({ stopReason: result.stopReason, diagnostic: result.diagnostic || '', output: result.output }).slice(0, 2000);
       agent.status = result.stopReason === 'completed' ? 'done' : result.stopReason;
       agent.finishedAt = now();
+      if (result.stopReason !== 'completed') {
+        agent.status = 'failed';
+        agent.error = result.diagnostic || `子 Agent 未完成：${result.stopReason}`;
+        this.log(run, label, '失败', agent.error, 'bad');
+        this.touch(run, true);
+        throw new Error(agent.error);
+      }
       this.log(run, label, '覆命', result.output.slice(0, 600) || '（无文本输出）', 'ok');
       this.touch(run, true);
       return result.output;
@@ -516,6 +533,9 @@ export class CourtOrchestrator {
       return;
     }
     if (event.type === 'turn/end') {
+      agent.events = agent.events || [];
+      agent.events.push({ type: event.type, reason: event.data?.reason });
+      if (agent.events.length > 30) agent.events.shift();
       if (agent.status === 'running') agent.status = 'idle';
       this.touch(run);
     }
@@ -529,6 +549,7 @@ export class CourtOrchestrator {
     try {
       const parent = await createRunParent(this.ctx, { cwd: run.cwd, signal });
       parentHandle = parent.handle;
+      if (parentHandle) this.parentHandles.set(run.id, parentHandle);
       this.parents.set(run.id, parent.agent);
       run.parentSessionId = parent.agent.id;
 
@@ -576,13 +597,7 @@ export class CourtOrchestrator {
       clearTimeout(timeout);
       this.controllers.delete(run.id);
       this.parents.delete(run.id);
-      if (parentHandle) {
-        try {
-          await parentHandle.dispose();
-        } catch {
-          /* ignore */
-        }
-      }
+      // 父会话保留为新的 DSH 对话；插件卸载时才统一释放，避免 run 结束后对话立刻消失。
       if (run.status === 'completed' || run.status === 'failed' || run.status === 'escalated' || run.status === 'cancelled') {
         run.finishedAt = run.finishedAt || now();
         await this.store.save(run);

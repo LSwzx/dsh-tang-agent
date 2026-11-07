@@ -15,7 +15,7 @@ import { CourtOrchestrator, renderRunReport } from './court/orchestrator.js';
 import { registerRoutes } from './court/routes.js';
 
 export const name = 'dsh-tang-agent';
-export const inject = ['tools', 'agents', 'subagents', 'webServer', 'fs', 'subprocess', 'workingDirectory'];
+export const inject = ['tools', 'agents', 'subagents', 'webServer', 'fs', 'subprocess', 'workingDirectory', 'agentDefaultModel'];
 
 const MAX_EDICT_LENGTH = 4000;
 

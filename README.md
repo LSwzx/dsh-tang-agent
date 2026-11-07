@@ -86,6 +86,12 @@ flowchart TD
 - 面板显示每个子 Agent 的模型、Session 短 id、实时文本、真实工具调用与结果、失败原因。
 - UI 不运行任何状态机；刷新后按 `runId` 恢复。
 
+### 会话隔离
+
+每次朝议都会通过 `ctx.agents.create()` 新建一个**独立父会话**，并 `attachSession` 到当前工作区；中书、钦天监、门下、尚书与六部都是该父会话下的子 Agent。当前对话只收到 `tang_court` 的最终工具结果，不会混入子 Agent 的中间过程。父会话保留为新的 DSH 对话，插件卸载时才统一释放。
+
+兵部命令统一使用 UTF-8 输出（PowerShell `$OutputEncoding` / Python `PYTHONIOENCODING`），中文路径与 stdout 不再出现 `?` 乱码。
+
 ---
 
 ## 四、模式

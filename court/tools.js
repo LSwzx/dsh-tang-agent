@@ -142,6 +142,7 @@ async function runArgv(ctx, run, argv, timeoutMs, signal) {
         stdout: { maxBytes: 131_072, spill: { maxBytes: 2_097_152 } },
         stderr: { maxBytes: 65_536 },
       },
+      env: { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', LANG: 'C.UTF-8' },
       graceMs: 2_000,
       signal: controller.signal,
     });
@@ -161,7 +162,14 @@ async function runCommand(ctx, run, command, timeoutMs, signal) {
   const environment = await ctx.subprocess.terminalEnvironment(signal);
   const windows = environment.platform === 'windows';
   const argv = windows
-    ? ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command]
+    ? [
+        'powershell.exe',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        // 统一 UTF-8，避免中文路径/文件名在 stdout 中变成问号。
+        '$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ' + command,
+      ]
     : ['/bin/sh', '-lc', command];
   return runArgv(ctx, run, argv, timeoutMs, signal);
 }
