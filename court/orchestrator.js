@@ -76,6 +76,7 @@ function normalizeDraft(raw, edict, revision, previous) {
       deliverable: String(found?.deliverable || `${meta.name}交付物`),
       tools: meta.toolLabel ? [meta.toolLabel] : [],
       deadline: String(found?.deadline || '旬日'),
+      wave: key === 'works' ? 1 : 2,
     };
   });
   const summary = String(payload.summary || payload.plan || `中书省奉旨草拟：${edict}`).slice(0, 1200);
@@ -141,7 +142,72 @@ export class CourtOrchestrator {
     this.parents = new Map();
     this.subscribers = new Map();
     this.saveTimers = new Map();
+    this.agentRuns = new Map();
+    this.pendingApprovals = new Map();
+    this.disposeApproval = ctx.on
+      ? ctx.on('approval/request', (request, next) => this.handleApproval(request, next))
+      : undefined;
     this.ready = store.init();
+  }
+
+  /**
+   * 用 DSH 原生 approval/request waterfall 承接插件自己的审批：
+   * 请求进入 pending 队列，侧边栏弹出“允许/拒绝”，用户点击后 resolve。
+   */
+  async handleApproval(request, next) {
+    const runId = this.agentRuns.get(request.agent?.id);
+    const run = runId ? this.runs.get(runId) : undefined;
+    if (!run || !request.toolName?.startsWith('tang_')) return next();
+    const decision = await this.requestApproval(run, {
+      toolName: request.toolName,
+      reason: request.reason || '',
+      displayReason: request.displayReason || {},
+      signal: request.signal,
+      actor: request.agent?.id,
+    });
+    return decision === 'allow' ? 'allowed-once' : 'rejected';
+  }
+
+  async requestApproval(run, request) {
+    const id = `approval-${randomUUID()}`;
+    const entry = {
+      id,
+      runId: run.id,
+      actor: request.actor || '',
+      toolName: request.toolName,
+      reason: request.reason || '',
+      displayReason: request.displayReason || {},
+      status: 'pending',
+      createdAt: now(),
+    };
+    run.approvals = run.approvals || [];
+    run.approvals.push(entry);
+    this.touch(run, true);
+
+    const decision = await new Promise((resolve) => {
+      const settle = (value) => {
+        if (pending.timer) clearTimeout(pending.timer);
+        this.pendingApprovals.delete(id);
+        resolve(value);
+      };
+      const pending = { settle, runId: run.id };
+      this.pendingApprovals.set(id, pending);
+      pending.timer = setTimeout(() => settle('timeout'), 5 * 60 * 1000);
+      request.signal?.addEventListener('abort', () => settle('cancel'), { once: true });
+    });
+    entry.status = decision === 'allow' ? 'allowed' : decision === 'timeout' ? 'timeout' : decision === 'cancel' ? 'cancelled' : 'rejected';
+    entry.decidedAt = now();
+    const action = decision === 'allow' ? '批准' : decision === 'timeout' ? '超时' : decision === 'cancel' ? '取消' : '驳回';
+    this.log(run, '皇帝', action, `${entry.toolName}：${entry.reason}`, decision === 'allow' ? 'ok' : 'bad');
+    this.touch(run, true);
+    return decision;
+  }
+
+  decideApproval(id, decision) {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending) return false;
+    pending.settle(decision === 'allow' ? 'allow' : 'deny');
+    return true;
   }
 
   roleLabel(role) {
@@ -228,6 +294,20 @@ export class CourtOrchestrator {
         /* ignore */
       }
     }
+    for (const pending of this.pendingApprovals.values()) {
+      try {
+        pending.settle('deny');
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.disposeApproval) {
+      try {
+        this.disposeApproval();
+      } catch {
+        /* ignore */
+      }
+    }
     for (const timer of this.saveTimers.values()) clearTimeout(timer);
     this.saveTimers.clear();
     await this.store.close();
@@ -269,6 +349,8 @@ export class CourtOrchestrator {
       agents: {},
       agentHistory: [],
       agentCount: 0,
+      approvals: [],
+      wave: 0,
       spawns: [],
       history: [],
       createdAt: Date.now(),
@@ -278,6 +360,7 @@ export class CourtOrchestrator {
       rev: 0,
     };
     this.runs.set(run.id, run);
+    run.requestApproval = (request) => this.requestApproval(run, request);
     this.controllers.set(run.id, new AbortController());
     this.log(run, '皇帝', '下旨', text, 'neutral');
     this.log(run, '尚书省', '接旨', `模式：${mode === 'full' ? '完整朝议' : mode === 'single' ? '单部直调' : '快速问答'}；驳回上限：${maxRejections}`, 'ok');
@@ -352,6 +435,12 @@ export class CourtOrchestrator {
         parent,
         signal,
         onEvent: (roleId, event) => this.recordEvent(run, roleId, event),
+        onCreated: (childId, agent) => {
+          this.agentRuns.set(childId, run.id);
+          if (run.agents[role]) run.agents[role].sessionId = childId;
+          // approval/request 是 agent-scoped 事件，必须挂在子 Agent 的 ctx 上才会收到。
+          agent.ctx.on('approval/request', (request, next) => this.handleApproval(request, next));
+        },
       });
       const agent = run.agents[role];
       agent.sessionId = result.childId;
@@ -569,26 +658,49 @@ export class CourtOrchestrator {
     run.dispatch = { text: dispatchText, plan: parseJson(dispatchText) };
 
     run.phase = 'executing';
+    run.wave = 1;
     this.touch(run, true);
-    const settled = await Promise.allSettled(
-      MINISTRY_ORDER.map(async (role) => {
-        const order = draft.orders.find((item) => item.ministry === role);
-        const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
-        return normalizeMinistryResult(role, output, parseJson(output));
-      }),
-    );
-    run.results = settled.map((item, index) =>
-      item.status === 'fulfilled'
-        ? item.value
-        : {
-            ministry: MINISTRY_ORDER[index],
-            name: MINISTRIES[MINISTRY_ORDER[index]].name,
-            status: 'failed',
-            summary: String(item.reason?.message || item.reason),
-            artifacts: [],
-            metrics: {},
-          },
-    );
+    const executeRole = async (role) => {
+      const order = draft.orders.find((item) => item.ministry === role);
+      const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
+      return normalizeMinistryResult(role, output, parseJson(output));
+    };
+
+    const wave1Roles = draft.orders.filter((order) => order.wave === 1).map((order) => order.ministry);
+    if (wave1Roles.length === 0) wave1Roles.push('works');
+    const wave2Roles = draft.orders
+      .filter((order) => order.wave !== 1 && !wave1Roles.includes(order.ministry))
+      .map((order) => order.ministry);
+
+    this.log(run, '尚书省', '第一波', `先派 ${wave1Roles.join('、')} 落盘交付物；其余部等落盘后再读取。`, 'ok');
+    const wave1 = await Promise.allSettled(wave1Roles.map(executeRole));
+    const wave1Done = wave1Roles.every((role) => run.agents[role]?.status === 'done');
+    this.log(run, '尚书省', '第一波完成', wave1Done ? '第一波已落盘，进入第二波。' : '第一波未全部成功，第二波仍执行并如实标注缺口。', wave1Done ? 'ok' : 'warn');
+
+    run.wave = 2;
+    this.touch(run, true);
+    this.log(run, '尚书省', '第二波', `派发 ${wave2Roles.join('、')}（读取/统计/审查）。`, 'ok');
+    const wave2 = await Promise.allSettled(wave2Roles.map(executeRole));
+
+    const byRole = {};
+    wave1Roles.forEach((role, index) => {
+      byRole[role] = wave1[index];
+    });
+    wave2Roles.forEach((role, index) => {
+      byRole[role] = wave2[index];
+    });
+    run.results = MINISTRY_ORDER.map((role) => {
+      const item = byRole[role];
+      if (item && item.status === 'fulfilled') return item.value;
+      return {
+        ministry: role,
+        name: MINISTRIES[role].name,
+        status: 'failed',
+        summary: String(item?.reason?.message || item?.reason || '未执行'),
+        artifacts: [],
+        metrics: {},
+      };
+    });
     this.touch(run, true);
 
     run.phase = 'aggregating';

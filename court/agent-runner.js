@@ -75,7 +75,7 @@ function extractOutput(result) {
  * @returns {Promise<{childId: string, output: string, stopReason: string, model: object|undefined}>}
  */
 export async function runSubagent(ctx, options) {
-  const { role, label, prompt, task, tools, cwd, parent, signal, onEvent } = options;
+  const { role, label, prompt, task, tools, cwd, parent, signal, onEvent, onCreated } = options;
   const provider = ctx.subagents?.getProvider?.('spawn');
   if (!provider) throw new Error('DSH 未加载 spawn 子 Agent provider，无法创建真实子 Agent。');
 
@@ -87,6 +87,14 @@ export async function runSubagent(ctx, options) {
   const stopCreated = ctx.on('agent/created', ({ agent }) => {
     if (agent.id !== childId) return;
     childAgent = agent;
+    try {
+      onCreated?.(childId, agent);
+      // 当前会话可能默认 never；为子 Agent 打开原生 approval 请求，交给插件侧边栏作答。
+      const approval = ctx.get ? ctx.get('approval') : ctx.approval;
+      if (approval && typeof approval.setPolicy === 'function') approval.setPolicy(agent, 'ask');
+    } catch {
+      /* 审批服务不可用时工具会 fail-closed */
+    }
     try {
       const order = Number(agent.ctx.systemPrompt.getSectionOrder?.('DEPLOYMENT_PERSONA_PREFIX'));
       agent.ctx.systemPrompt.section({

@@ -71,6 +71,12 @@ const TEXT = {
     copied: '已复制',
     realBadge: 'REAL',
     openRun: '恢复上次朝议',
+    approvalTitle: '审批请求',
+    approvalHint: 'DSH approval 请求：允许或拒绝本次真实写操作/命令。',
+    allow: '允许',
+    deny: '拒绝',
+    idle: '待命',
+    awaiting: '候旨',
   },
   en: {
     title: 'Three Departments Workflow',
@@ -133,6 +139,12 @@ const TEXT = {
     copied: 'Copied',
     realBadge: 'REAL',
     openRun: 'Resume last run',
+    approvalTitle: 'Approval request',
+    approvalHint: 'DSH approval request: allow or deny this real write/command.',
+    allow: 'Allow',
+    deny: 'Deny',
+    idle: 'Idle',
+    awaiting: 'Awaiting',
   },
 };
 
@@ -217,6 +229,34 @@ function useRun() {
     };
   }, [runId]);
 
+  // 工具/其他会话启动的朝议也可能有 pending 审批；面板自动附着到该 run，避免审批不可见。
+  React.useEffect(() => {
+    let stopped = false;
+    const check = async () => {
+      try {
+        const list = await fetch('/api/tang/runs').then((response) => (response.ok ? response.json() : []));
+        for (const item of list) {
+          if (item.status !== 'running' || item.id === runId) continue;
+          const detail = await fetch(`/api/tang/runs/${encodeURIComponent(item.id)}`).then((response) =>
+            response.ok ? response.json() : null,
+          );
+          if (detail && (detail.approvals || []).some((approval) => approval.status === 'pending')) {
+            if (!stopped) setRunId(item.id);
+            return;
+          }
+        }
+      } catch {
+        /* 面板自动附着失败不影响当前 run */
+      }
+    };
+    const interval = setInterval(check, 5_000);
+    check();
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [runId]);
+
   const remember = (id) => {
     setRunId(id);
     try {
@@ -255,6 +295,18 @@ function useRun() {
     }
   };
 
+  const decideApproval = async (id, decision) => {
+    try {
+      await fetch(`/api/tang/approvals/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-tang-ui': '1' },
+        body: JSON.stringify({ decision }),
+      });
+    } catch (reason) {
+      setError(String(reason.message || reason));
+    }
+  };
+
   const clear = () => {
     setRunId('');
     setRun(null);
@@ -266,7 +318,7 @@ function useRun() {
     }
   };
 
-  return { runId, run, error, start, cancel, clear, resume: () => setRunId((id) => id) };
+  return { runId, run, error, start, cancel, clear, decideApproval, resume: () => setRunId((id) => id) };
 }
 
 const STAGE_INDEX = {
@@ -320,45 +372,58 @@ function Head({ title, en, right }) {
 }
 
 function AgentGrid({ run, t }) {
-  const agents = run?.agents ? Object.values(run.agents) : [];
-  const ordered = agents.sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role));
+  const agents = run?.agents || {};
+  const ordered = ROLE_ORDER.map(
+    (role) =>
+      agents[role] || {
+        role,
+        name: CourtMeta.ROLE_LABELS[role] || role,
+        status: 'idle',
+        model: '—',
+        sessionId: '',
+        stream: '',
+        text: '',
+        toolCalls: [],
+      },
+  );
+  const icon = (status) =>
+    status === 'running' ? '◐' : status === 'done' ? '✓' : status === 'blocked' ? '!' : status === 'failed' ? '×' : '○';
   return h(
     'section',
     { className: 'tda-card' },
     h(Head, {
       title: t.agents,
-      en: `${t.agentCount} ${run?.agentCount || 0}`,
+      en: `${Object.keys(agents).length} / ${ROLE_ORDER.length}`,
       right: h('span', { className: 'tda-badge tda-badge-real' }, t.realBadge),
     }),
-    ordered.length === 0
-      ? h('p', { className: 'tda-pending' }, t.agentEmpty)
-      : h(
-          'div',
-          { className: 'tda-agentgrid' },
-          ordered.map((agent) =>
+    h(
+      'div',
+      { className: 'tda-agentgrid' },
+      ordered.map((agent) =>
+        h(
+          'article',
+          { key: agent.role, className: 'tda-agent is-' + (agent.status || 'idle') },
+          h(
+            'div',
+            { className: 'tda-agent-head' },
+            h('span', { className: 'tda-status-icon is-' + (agent.status || 'idle'), 'aria-label': agent.status }, icon(agent.status)),
+            h('span', { className: 'tda-glyph' }, (CourtMeta.MINISTRIES[agent.role] || CourtMeta.EXTRA_ROLES[agent.role] || {}).glyph || '臣'),
             h(
-              'article',
-              { key: agent.role, className: 'tda-agent is-' + (agent.status || 'queued') },
-              h(
-                'div',
-                { className: 'tda-agent-head' },
-                h('span', { className: 'tda-glyph' }, (CourtMeta.MINISTRIES[agent.role] || CourtMeta.EXTRA_ROLES[agent.role] || {}).glyph || '臣'),
-                h(
-                  'div',
-                  { style: { minWidth: 0 } },
-                  h('div', { className: 'tda-ministry-name' }, agent.name),
-                  h('div', { className: 'tda-agent-meta' }, `${t.model}: ${agent.model || 'default'}`),
-                ),
-                h('span', { className: 'tda-badge' }, agent.status || 'queued'),
-              ),
-              agent.sessionId
-                ? h('div', { className: 'tda-agent-meta' }, `${t.session}: ${agent.sessionId.slice(0, 8)}`)
-                : null,
-              h(
-                'div',
-                { className: 'tda-agent-stream' },
-                (agent.stream || agent.text || '').slice(-1200) || t.stream + '…',
-              ),
+              'div',
+              { style: { minWidth: 0 } },
+              h('div', { className: 'tda-ministry-name' }, agent.name),
+              h('div', { className: 'tda-agent-meta' }, `${t.model}: ${agent.model || '—'}`),
+            ),
+            h('span', { className: 'tda-badge' }, agent.status === 'idle' ? t.idle : agent.status || 'queued'),
+          ),
+          agent.sessionId
+            ? h('div', { className: 'tda-agent-meta' }, `${t.session}: ${agent.sessionId.slice(0, 8)}`)
+            : null,
+          h(
+            'div',
+            { className: 'tda-agent-stream' },
+            (agent.stream || agent.text || '').slice(-1200) || (agent.status === 'idle' ? t.awaiting : t.stream + '…'),
+          ),
               agent.error ? h('div', { className: 'tda-agent-error' }, agent.error) : null,
               h(
                 'div',
@@ -546,10 +611,38 @@ function Banner({ run, t }) {
   return null;
 }
 
+function ApprovalCard({ run, t, decide }) {
+  const pending = (run?.approvals || []).filter((item) => item.status === 'pending');
+  if (pending.length === 0) return null;
+  return h(
+    'div',
+    { className: 'tda-approval', role: 'alertdialog', 'aria-label': t.approvalTitle },
+    pending.map((item) =>
+      h(
+        'div',
+        { className: 'tda-approval-row', key: item.id },
+        h(
+          'div',
+          { style: { minWidth: 0, flex: '1 1 220px' } },
+          h('h3', null, t.approvalTitle + ' · ' + item.toolName),
+          h('p', null, item.reason || t.approvalHint),
+          h('div', { className: 'tda-agent-meta' }, t.approvalHint),
+        ),
+        h(
+          'div',
+          { className: 'tda-approval-actions' },
+          h('button', { type: 'button', className: 'tda-btn tda-btn-primary', onClick: () => decide(item.id, 'allow') }, t.allow),
+          h('button', { type: 'button', className: 'tda-btn tda-btn-danger', onClick: () => decide(item.id, 'deny') }, t.deny),
+        ),
+      ),
+    ),
+  );
+}
+
 function TangPanel() {
   const lang = useLang();
   const t = TEXT[lang];
-  const { runId, run, error, start, cancel, clear } = useRun();
+  const { runId, run, error, start, cancel, clear, decideApproval } = useRun();
   const [text, setText] = React.useState(() => {
     try {
       return window.localStorage.getItem('dsh-tang-agent:edict') || '';
@@ -673,6 +766,7 @@ function TangPanel() {
       error ? h('div', { className: 'tda-banner is-bad', style: { marginBottom: 16 } }, h('span', { className: 'tda-banner-seal' }, '!'), h('div', null, h('h3', null, t.error), h('p', null, error))) : null,
       h(Rail, { phase: run?.phase || 'idle', t }),
       h(Banner, { run, t }),
+      h(ApprovalCard, { run, t, decide: decideApproval }),
 
       h(
         'div',

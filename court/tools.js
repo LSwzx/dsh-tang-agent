@@ -38,7 +38,19 @@ function defineTool(name, description, parameters, execute, options = {}) {
   };
 }
 
-async function approve(ctx, exec, toolName, reason) {
+async function approve(ctx, run, exec, toolName, reason) {
+  // 优先走插件侧边栏的审批队列：这是用户真实点击的入口，且不依赖宿主是否挂载 ui-approval。
+  if (typeof run.requestApproval === 'function') {
+    const decision = await run.requestApproval({
+      toolName,
+      reason,
+      displayReason: { zh: reason, en: reason },
+      signal: exec.signal,
+      actor: exec.agent?.id,
+    });
+    if (decision !== 'allow') throw new Error(`审批未通过（${decision}）：${reason}`);
+    return;
+  }
   const approval = ctx.get ? ctx.get('approval') : ctx.approval;
   if (!approval) throw new Error('审批服务不可用，拒绝执行真实写操作。');
   const outcome = await approval.request({
@@ -205,7 +217,7 @@ export function createMinistryTools(ctx, run, role) {
           const relativePath = relative(ctx.fs.processPath(root), ctx.fs.processPath(target)).replace(/\\/g, '/');
           const scratch = isScratchPath(relativePath);
           if (!scratch) {
-            await approve(ctx, exec, 'tang_works_write', `工部拟写入 ${target.displayPath}：${args.reason || '交付物'}`);
+            await approve(ctx, run, exec, 'tang_works_write', `工部拟写入 ${target.displayPath}：${args.reason || '交付物'}`);
           }
           try {
             await mkdir(dirname(ctx.fs.processPath(target)), { recursive: true });
@@ -231,7 +243,7 @@ export function createMinistryTools(ctx, run, role) {
             approval: scratch ? 'scratch-exempt (tang-artifacts/)' : 'allowed-once',
           };
         },
-        { timeoutMs: 30_000 },
+        { timeoutMs: 480_000 },
       ),
       defineTool(
         'tang_works_read',
@@ -266,12 +278,12 @@ export function createMinistryTools(ctx, run, role) {
           const command = String(args.command);
           const safe = isSafeReadonlyCommand(command);
           if (!safe) {
-            await approve(ctx, exec, 'tang_war_run', `兵部拟执行命令：${command}`);
+            await approve(ctx, run, exec, 'tang_war_run', `兵部拟执行命令：${command}`);
           }
           const result = await runCommand(ctx, run, command, Number(args.timeout_ms) || 30_000, exec.signal);
           return { ...result, approval: safe ? 'safe-readonly' : 'allowed-once' };
         },
-        { timeoutMs: 120_000 },
+        { timeoutMs: 480_000 },
       ),
     );
   }
