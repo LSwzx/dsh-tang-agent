@@ -76,6 +76,7 @@ class MinistryOrder:
     deliverable: str
     tools: List[str]
     deadline: str = "旬日"
+    wave: int = 2
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -85,6 +86,7 @@ class MinistryOrder:
             "deliverable": self.deliverable,
             "tools": list(self.tools),
             "deadline": self.deadline,
+            "wave": self.wave,
         }
 
 
@@ -290,6 +292,7 @@ class DefaultPlanner:
                     deliverable=self._deliverable(key, edict),
                     tools=[str(tool) for tool in meta["tools"]],
                     deadline=self._DEADLINES[(seed + index) % len(self._DEADLINES)],
+                    wave=1 if key == "works" else 2,
                 )
             )
 
@@ -668,16 +671,30 @@ class TangCourt:
         )
 
         run.stage = Stage.EXECUTING
-        for order in draft.orders:
-            result = self.executor.execute(order, text)
-            run.results.append(result)
+        # 自定义 planner 可能没有显式 wave；按“工部先行”兜底，保证两波语义不漂移。
+        if draft.orders and not any(order.wave == 1 for order in draft.orders):
+            for order in draft.orders:
+                if order.ministry == "works":
+                    order.wave = 1
+        for wave in (1, 2):
+            wave_orders = [order for order in draft.orders if order.wave == wave]
             self._log(
                 run,
-                order.name,
-                "覆命",
-                result.summary + "　交付：" + "、".join(result.artifacts),
+                "尚书省",
+                "第 {n} 波".format(n=wave),
+                ("先派工部落盘，余部候其交付。" if wave == 1 else "工部已落盘，派刑、兵、礼、户、吏读取/统计/审查。"),
                 "ok",
             )
+            for order in wave_orders:
+                result = self.executor.execute(order, text)
+                run.results.append(result)
+                self._log(
+                    run,
+                    order.name,
+                    "覆命",
+                    result.summary + "　交付：" + "、".join(result.artifacts),
+                    "ok",
+                )
 
         run.stage = Stage.COMPLETED
         self._log(
