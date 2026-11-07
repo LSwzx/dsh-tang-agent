@@ -141,7 +141,60 @@ export class CourtOrchestrator {
     this.parents = new Map();
     this.subscribers = new Map();
     this.saveTimers = new Map();
+    this.agentRuns = new Map();
+    this.pendingApprovals = new Map();
+    this.disposeApproval = ctx.on
+      ? ctx.on('approval/request', (request, next) => this.handleApproval(request, next))
+      : undefined;
     this.ready = store.init();
+  }
+
+  /**
+   * 用 DSH 原生 approval/request waterfall 承接插件自己的审批：
+   * 请求进入 pending 队列，侧边栏弹出“允许/拒绝”，用户点击后 resolve。
+   */
+  async handleApproval(request, next) {
+    const runId = this.agentRuns.get(request.agent?.id);
+    const run = runId ? this.runs.get(runId) : undefined;
+    if (!run || !request.toolName?.startsWith('tang_')) return next();
+    const id = `approval-${randomUUID()}`;
+    const entry = {
+      id,
+      runId,
+      actor: request.agent?.id,
+      toolName: request.toolName,
+      reason: request.reason || '',
+      displayReason: request.displayReason || {},
+      status: 'pending',
+      createdAt: now(),
+    };
+    run.approvals = run.approvals || [];
+    run.approvals.push(entry);
+    this.touch(run, true);
+
+    const decision = await new Promise((resolve) => {
+      const settle = (value) => {
+        if (pending.timer) clearTimeout(pending.timer);
+        this.pendingApprovals.delete(id);
+        resolve(value);
+      };
+      const pending = { settle, runId };
+      this.pendingApprovals.set(id, pending);
+      pending.timer = setTimeout(() => settle('deny'), 5 * 60 * 1000);
+      request.signal?.addEventListener('abort', () => settle('deny'), { once: true });
+    });
+    entry.status = decision === 'allow' ? 'allowed' : 'rejected';
+    entry.decidedAt = now();
+    this.log(run, '皇帝', decision === 'allow' ? '批准' : '驳回', `${entry.toolName}：${entry.reason}`, decision === 'allow' ? 'ok' : 'bad');
+    this.touch(run, true);
+    return decision === 'allow' ? 'allowed-once' : 'rejected';
+  }
+
+  decideApproval(id, decision) {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending) return false;
+    pending.settle(decision === 'allow' ? 'allow' : 'deny');
+    return true;
   }
 
   roleLabel(role) {
@@ -569,26 +622,43 @@ export class CourtOrchestrator {
     run.dispatch = { text: dispatchText, plan: parseJson(dispatchText) };
 
     run.phase = 'executing';
+    run.wave = 1;
     this.touch(run, true);
-    const settled = await Promise.allSettled(
-      MINISTRY_ORDER.map(async (role) => {
-        const order = draft.orders.find((item) => item.ministry === role);
-        const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
-        return normalizeMinistryResult(role, output, parseJson(output));
-      }),
-    );
-    run.results = settled.map((item, index) =>
-      item.status === 'fulfilled'
-        ? item.value
-        : {
-            ministry: MINISTRY_ORDER[index],
-            name: MINISTRIES[MINISTRY_ORDER[index]].name,
-            status: 'failed',
-            summary: String(item.reason?.message || item.reason),
-            artifacts: [],
-            metrics: {},
-          },
-    );
+    const executeRole = async (role) => {
+      const order = draft.orders.find((item) => item.ministry === role);
+      const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
+      return normalizeMinistryResult(role, output, parseJson(output));
+    };
+
+    this.log(run, '尚书省', '第一波', '先派工部落盘交付物；其余部等落盘后再读取。', 'ok');
+    const wave1 = await Promise.allSettled(['works'].map(executeRole));
+    const wave1Done = run.agents.works?.status === 'done';
+    this.log(run, '尚书省', '第一波完成', wave1Done ? '工部已落盘，进入第二波。' : '工部未成功，第二波仍执行并如实标注缺口。', wave1Done ? 'ok' : 'warn');
+
+    run.wave = 2;
+    this.touch(run, true);
+    this.log(run, '尚书省', '第二波', '派发刑部、兵部、礼部、户部、吏部（读取/统计/审查）。', 'ok');
+    const wave2 = await Promise.allSettled(['justice', 'war', 'rites', 'revenue', 'personnel'].map(executeRole));
+
+    const byRole = {};
+    ['works'].forEach((role, index) => {
+      byRole[role] = wave1[index];
+    });
+    ['justice', 'war', 'rites', 'revenue', 'personnel'].forEach((role, index) => {
+      byRole[role] = wave2[index];
+    });
+    run.results = MINISTRY_ORDER.map((role) => {
+      const item = byRole[role];
+      if (item && item.status === 'fulfilled') return item.value;
+      return {
+        ministry: role,
+        name: MINISTRIES[role].name,
+        status: 'failed',
+        summary: String(item?.reason?.message || item?.reason || '未执行'),
+        artifacts: [],
+        metrics: {},
+      };
+    });
     this.touch(run, true);
 
     run.phase = 'aggregating';
