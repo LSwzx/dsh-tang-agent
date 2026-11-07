@@ -77,6 +77,7 @@ const TEXT = {
     deny: '拒绝',
     idle: '待命',
     awaiting: '候旨',
+    emperor: '皇帝',
   },
   en: {
     title: 'Three Departments Workflow',
@@ -145,6 +146,7 @@ const TEXT = {
     deny: 'Deny',
     idle: 'Idle',
     awaiting: 'Awaiting',
+    emperor: 'Emperor',
   },
 };
 
@@ -373,21 +375,48 @@ function Head({ title, en, right }) {
 
 function AgentGrid({ run, t }) {
   const agents = run?.agents || {};
-  const ordered = ROLE_ORDER.map(
-    (role) =>
-      agents[role] || {
-        role,
-        name: CourtMeta.ROLE_LABELS[role] || role,
-        status: 'idle',
-        model: '—',
-        sessionId: '',
-        stream: '',
-        text: '',
-        toolCalls: [],
+  const [selected, setSelected] = React.useState('shangshu');
+  const getAgent = (role) =>
+    agents[role] || {
+      role,
+      name: CourtMeta.ROLE_LABELS[role] || role,
+      status: 'idle',
+      model: '—',
+      sessionId: '',
+      stream: '',
+      text: '',
+      toolCalls: [],
+    };
+  const statusLabel = (status) =>
+    status === 'running' ? t.running : status === 'done' ? t.done : status === 'blocked' ? t.blocked : status === 'failed' ? t.failed : t.idle;
+  const node = (role, kind) => {
+    const agent = getAgent(role);
+    const status = agent.status || 'idle';
+    return h(
+      'button',
+      {
+        type: 'button',
+        key: role,
+        className: `tda-org-node tda-org-${kind} is-${status}` + (selected === role ? ' is-selected' : ''),
+        onClick: () => setSelected(role),
+        title: agent.name,
       },
-  );
-  const icon = (status) =>
-    status === 'running' ? '◐' : status === 'done' ? '✓' : status === 'blocked' ? '!' : status === 'failed' ? '×' : '○';
+      h('span', { className: 'tda-org-dot is-' + status, 'aria-hidden': 'true' }),
+      h('span', { className: 'tda-org-name' }, agent.name),
+      h('span', { className: 'tda-org-status' }, statusLabel(status)),
+    );
+  };
+  const emperorStatus = !run
+    ? 'idle'
+    : run.status === 'running'
+      ? 'running'
+      : run.status === 'completed'
+        ? 'done'
+        : run.status === 'failed'
+          ? 'failed'
+          : 'idle';
+  const selectedAgent = getAgent(selected);
+
   return h(
     'section',
     { className: 'tda-card' },
@@ -398,55 +427,73 @@ function AgentGrid({ run, t }) {
     }),
     h(
       'div',
-      { className: 'tda-agentgrid' },
-      ordered.map((agent) =>
-        h(
-          'article',
-          { key: agent.role, className: 'tda-agent is-' + (agent.status || 'idle') },
-          h(
-            'div',
-            { className: 'tda-agent-head' },
-            h('span', { className: 'tda-status-icon is-' + (agent.status || 'idle'), 'aria-label': agent.status }, icon(agent.status)),
-            h('span', { className: 'tda-glyph' }, (CourtMeta.MINISTRIES[agent.role] || CourtMeta.EXTRA_ROLES[agent.role] || {}).glyph || '臣'),
-            h(
-              'div',
-              { style: { minWidth: 0 } },
-              h('div', { className: 'tda-ministry-name' }, agent.name),
-              h('div', { className: 'tda-agent-meta' }, `${t.model}: ${agent.model || '—'}`),
-            ),
-            h('span', { className: 'tda-badge' }, agent.status === 'idle' ? t.idle : agent.status || 'queued'),
-          ),
-          agent.sessionId
-            ? h('div', { className: 'tda-agent-meta' }, `${t.session}: ${agent.sessionId.slice(0, 8)}`)
-            : null,
-          h(
-            'div',
-            { className: 'tda-agent-stream' },
-            (agent.stream || agent.text || '').slice(-1200) || (agent.status === 'idle' ? t.awaiting : t.stream + '…'),
-          ),
-              agent.error ? h('div', { className: 'tda-agent-error' }, agent.error) : null,
+      { className: 'tda-org' },
+      h(
+        'div',
+        { className: 'tda-org-emperor is-' + emperorStatus },
+        h('span', { className: 'tda-org-dot is-' + emperorStatus }),
+        h('span', { className: 'tda-org-name' }, t.emperor),
+        h('span', { className: 'tda-org-status' }, statusLabel(emperorStatus)),
+      ),
+      h('div', { className: 'tda-org-trunk' }),
+      h('div', { className: 'tda-org-departments' }, [
+        node('menxia', 'dept'),
+        node('shangshu', 'dept'),
+        node('zhongshu', 'dept'),
+      ]),
+      h('div', { className: 'tda-org-bus' }),
+      h(
+        'div',
+        { className: 'tda-org-ministries' },
+        CourtMeta.MINISTRY_ORDER.map((role) => node(role, 'ministry')),
+      ),
+      h(
+        'div',
+        { className: 'tda-org-aux' },
+        h('span', { className: 'tda-org-aux-line', 'aria-hidden': 'true' }),
+        node('qintianjian', 'aux'),
+      ),
+    ),
+    h(
+      'div',
+      { className: 'tda-org-detail' },
+      h(
+        'div',
+        { className: 'tda-org-detail-head' },
+        h('strong', null, selectedAgent.name),
+        h('span', { className: 'tda-badge' }, statusLabel(selectedAgent.status || 'idle')),
+        h('span', { className: 'tda-agent-meta' }, `${t.model}: ${selectedAgent.model || '—'}`),
+        selectedAgent.sessionId
+          ? h('span', { className: 'tda-agent-meta' }, `${t.session}: ${selectedAgent.sessionId.slice(0, 8)}`)
+          : null,
+      ),
+      h(
+        'div',
+        { className: 'tda-agent-stream' },
+        (selectedAgent.stream || selectedAgent.text || '').slice(-1200) ||
+          (selectedAgent.status === 'idle' ? t.awaiting : t.stream + '…'),
+      ),
+      selectedAgent.error ? h('div', { className: 'tda-agent-error' }, selectedAgent.error) : null,
+      h(
+        'div',
+        { className: 'tda-tools' },
+        (selectedAgent.toolCalls || []).length === 0
+          ? h('span', { className: 'tda-pending' }, t.noTools)
+          : (selectedAgent.toolCalls || []).map((call, index) =>
               h(
                 'div',
-                { className: 'tda-tools' },
-                (agent.toolCalls || []).length === 0
-                  ? h('span', { className: 'tda-pending' }, t.noTools)
-                  : (agent.toolCalls || []).map((call, index) =>
-                      h(
-                        'div',
-                        { className: 'tda-tool', key: call.name + index },
-                        h('div', { className: 'tda-tool-name' }, '⚙ ' + call.name),
-                        h('div', { className: 'tda-tool-args' }, JSON.stringify(call.args)),
-                        h(
-                          'div',
-                          { className: 'tda-tool-result' + (call.error ? ' is-error' : '') },
-                          call.error || call.result || '…',
-                        ),
-                      ),
-                    ),
+                { className: 'tda-tool', key: call.name + index },
+                h('div', { className: 'tda-tool-name' }, '⚙ ' + call.name),
+                h('div', { className: 'tda-tool-args' }, JSON.stringify(call.args)),
+                h(
+                  'div',
+                  { className: 'tda-tool-result' + (call.error ? ' is-error' : '') },
+                  call.error || call.result || '…',
+                ),
               ),
             ),
-          ),
-        ),
+      ),
+    ),
   );
 }
 
