@@ -1,11 +1,8 @@
 /**
- * 把 engine.js + ui/*.js 打包成 DSH Client 模块。
+ * 把 court/meta.js + ui/*.js 打包成 DSH Client 模块。
  *
- * DSH 的浏览器半部只能加载一个 `client.js` 入口；这里用一个极小的
- * “去 export + 顺序拼接”构建，避免引入打包器依赖。engine.js 同时被
- * Host（index.js）以 ESM 方式 import，因此构建时只剥掉 export 关键字。
- *
- * 用法：node scripts/build-client.mjs
+ * UI 只做展示与调用 Host API，不包含状态机；真正的编排在 Host 的
+ * court/orchestrator.js 中。构建仅做“去 export + 顺序拼接”。
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -14,20 +11,17 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relative) => readFileSync(join(root, relative), 'utf8');
-
 const stripExports = (source) =>
   source.replace(/^export\s+(?=(?:const|let|var|function|class|async\s+function))/gm, '');
 
-const engine = stripExports(read('engine.js'));
+const meta = stripExports(read('court/meta.js'));
 const styles = stripExports(read('ui/styles.js'));
 const icons = stripExports(read('ui/icons.js'));
-const panel = read('ui/panel.js');
+const panel = read('ui/real-panel.js');
 
-// engine.js 导出的是零散函数；客户端里给它们一个命名空间，便于阅读。
 const namespace = [
-  'const TangEngine = {',
-  '  createState, begin, step, submitReview, runAll, renderReport, summary,',
-  '  stageLabel, hashSeed, MINISTRIES, MINISTRY_ORDER, STAGE_LABELS,',
+  'const CourtMeta = {',
+  '  MINISTRY_ORDER, MINISTRIES, EXTRA_ROLES, ROLE_LABELS, STAGE_LABELS, TOOL_MODE_LABELS,',
   '};',
 ].join('\n');
 
@@ -39,7 +33,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     'use strict';
     const React = require('react');
-${engine}
+${meta}
 
 ${namespace}
 

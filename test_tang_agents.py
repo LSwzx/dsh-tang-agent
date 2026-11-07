@@ -163,6 +163,7 @@ class PromptTest(unittest.TestCase):
             "zhongshu",
             "menxia",
             "shangshu",
+            "qintianjian",
             "works",
             "justice",
             "war",
