@@ -345,6 +345,11 @@ export const TANG_CSS = `
 .tda-approval-row h3 { margin: 0; font-family: var(--tda-serif); font-size: 13.5px; }
 .tda-approval-row p { margin: 3px 0; font-size: 12px; color: var(--dsw-alias-label-secondary); word-break: break-word; }
 .tda-approval-actions { display: flex; gap: 8px; flex: none; }
+.tda-continuation {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 9px;
+  padding: 6px 9px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 8px;
+  color: var(--dsw-alias-label-secondary); font-size: 11.5px;
+}
 
 /* ---------- org chart ---------- */
 .tda-org {

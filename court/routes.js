@@ -78,6 +78,7 @@ export function registerRoutes(ctx, orchestrator) {
             mode: body.mode,
             maxRejections: body.maxRejections,
             ministry: body.ministry,
+            continueFrom: body.continueFrom,
           });
           return json(res, 202, { runId: id });
         }

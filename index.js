@@ -54,6 +54,7 @@ export function apply(ctx, config = {}) {
         mode: { type: 'string', enum: ['full', 'single', 'quick'], description: 'full=完整朝议；single=单部直调；quick=快速问答。' },
         max_rejections: { type: 'integer', description: '门下省连驳上限，默认 3。' },
         ministry: { type: 'string', enum: ['works', 'justice', 'war', 'rites', 'revenue', 'personnel'], description: '单部直调时的部门。' },
+        continue_from: { type: 'string', description: '续旨：上一案的 runId；复用同一父会话并带上上一案结果。' },
         wait: { type: 'boolean', description: '是否等待完成；默认 true。false 时只返回 runId。' },
       },
       required: ['edict'],
@@ -69,6 +70,7 @@ export function apply(ctx, config = {}) {
         mode: args.mode,
         maxRejections: args.max_rejections,
         ministry: args.ministry,
+        continueFrom: args.continue_from,
       });
       if (args.wait === false) return `started run ${runId}`;
       const run = await orchestrator.wait(runId, exec.signal);

@@ -78,6 +78,9 @@ const TEXT = {
     idle: '待命',
     awaiting: '候旨',
     emperor: '皇帝',
+    continue: '续旨此案',
+    continuing: '续旨',
+    newCase: '改为新案',
   },
   en: {
     title: 'Three Departments Workflow',
@@ -147,6 +150,9 @@ const TEXT = {
     idle: 'Idle',
     awaiting: 'Awaiting',
     emperor: 'Emperor',
+    continue: 'Continue case',
+    continuing: 'Continuing',
+    newCase: 'New case',
   },
 };
 
@@ -701,6 +707,7 @@ function TangPanel() {
   const [ministry, setMinistry] = React.useState('works');
   const [maxRejections, setMaxRejections] = React.useState(3);
   const [copied, setCopied] = React.useState(false);
+  const [continuation, setContinuation] = React.useState('');
   const copyTimer = React.useRef(null);
   const busy = run?.status === 'running';
 
@@ -712,7 +719,14 @@ function TangPanel() {
     } catch {
       /* ignore */
     }
-    start({ edict: value, mode, ministry, maxRejections });
+    start({
+      edict: value,
+      mode,
+      ministry,
+      maxRejections,
+      ...(continuation ? { continueFrom: continuation } : {}),
+    });
+    setContinuation('');
   };
 
   const copy = () => {
@@ -791,8 +805,22 @@ function TangPanel() {
           'div',
           { className: 'tda-controls' },
           h('button', { type: 'button', className: 'tda-btn tda-btn-primary', onClick: issue, disabled: busy }, t.start),
+          run && !busy
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'tda-btn',
+                  onClick: () => {
+                    setContinuation(run.id);
+                    setText('');
+                  },
+                },
+                t.continue,
+              )
+            : null,
           busy ? h('button', { type: 'button', className: 'tda-btn tda-btn-danger', onClick: cancel }, t.cancel) : null,
-          h('button', { type: 'button', className: 'tda-btn', onClick: clear }, t.reset),
+          h('button', { type: 'button', className: 'tda-btn', onClick: () => { clear(); setContinuation(''); } }, t.reset),
           h('select', { className: 'tda-select', value: mode, onChange: (event) => setMode(event.target.value), 'aria-label': t.mode },
             h('option', { value: 'full' }, t.full),
             h('option', { value: 'single' }, t.single),
@@ -808,6 +836,18 @@ function TangPanel() {
             h('option', { value: 3 }, '3'),
           ),
         ),
+        continuation
+          ? h(
+              'div',
+              { className: 'tda-continuation' },
+              h('span', null, `${t.continuing} · ${continuation.slice(-8)}`),
+              h(
+                'button',
+                { type: 'button', className: 'tda-btn tda-btn-ghost', onClick: () => setContinuation('') },
+                t.newCase,
+              ),
+            )
+          : null,
       ),
 
       error ? h('div', { className: 'tda-banner is-bad', style: { marginBottom: 16 } }, h('span', { className: 'tda-banner-seal' }, '!'), h('div', null, h('h3', null, t.error), h('p', null, error))) : null,
