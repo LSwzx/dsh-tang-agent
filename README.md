@@ -144,17 +144,20 @@ flowchart TD
 
 ## 六、安装与启用
 
-本机已安装并启用。重新安装：
+已发布到 npm：<https://www.npmjs.com/package/dsh-tang-agent>
 
 ```powershell
-# 在 DSH 插件页选择目录 D:\dshprogram\dsh-tang-agent
-# 或让 DSH Agent 调用 plugin_manager install_bundle
+# 方式一：在 DSH 插件页直接输入包名
+dsh-tang-agent
+
+# 方式二：本地目录（开发时）
+D:\dshprogram\dsh-tang-agent
+
+# 方式三：让 DSH Agent 调用 plugin_manager install_bundle
 ```
 
-> **“添加插件”对话框里不要输入 `dsh-tang-agent` 包名。**
-> 本包是本地 bundle，`package.json` 标记为 `private`，没有发布到 npm；按包名搜索会返回“未找到相关插件”。
-> 请直接输入绝对路径 `D:\dshprogram\dsh-tang-agent`，或使用 GitHub 仓库地址/`plugin_manager install_bundle`。
-> 如果希望按包名安装，需要先 `npm login`，去掉 `private` 并发布到 npm；当前环境没有 npm 登录态。
+> 如果“添加插件”仍提示“未找到”，通常是安装源（中国大陆镜像）尚未同步新包；切换到 npm 官方源，或直接输入本地绝对路径。
+> 本地开发时也可以继续使用目录方式，npm 包与本地目录指向同一套代码。
 
 安装后左侧栏出现朱砂“唐”印，标题为 **三省六部工作流**。刷新页面（`Ctrl+R`）加载新 Client；若仍未更新，重启 DSH。
 
