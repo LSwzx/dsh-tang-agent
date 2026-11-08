@@ -151,6 +151,11 @@ flowchart TD
 # 或让 DSH Agent 调用 plugin_manager install_bundle
 ```
 
+> **“添加插件”对话框里不要输入 `dsh-tang-agent` 包名。**
+> 本包是本地 bundle，`package.json` 标记为 `private`，没有发布到 npm；按包名搜索会返回“未找到相关插件”。
+> 请直接输入绝对路径 `D:\dshprogram\dsh-tang-agent`，或使用 GitHub 仓库地址/`plugin_manager install_bundle`。
+> 如果希望按包名安装，需要先 `npm login`，去掉 `private` 并发布到 npm；当前环境没有 npm 登录态。
+
 安装后左侧栏出现朱砂“唐”印，标题为 **三省六部工作流**。刷新页面（`Ctrl+R`）加载新 Client；若仍未更新，重启 DSH。
 
 ---
