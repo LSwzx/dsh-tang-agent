@@ -295,7 +295,7 @@ export class CourtOrchestrator {
         /* ignore */
       }
     }
-    for (const handle of this.parentHandles.values()) {
+    for (const handle of new Set(this.parentHandles.values())) {
       try {
         await handle.dispose();
       } catch {
@@ -330,10 +330,19 @@ export class CourtOrchestrator {
     );
   }
 
-  async start(edict, opts = {}) {    await this.ready;
+  async start(edict, opts = {}) {
+    await this.ready;
     const text = String(edict || '').trim();
     if (!text) throw new Error('圣旨不可为空。');
     if (text.length > MAX_EDICT_LENGTH) throw new Error(`圣旨过长：上限 ${MAX_EDICT_LENGTH} 字。`);
+
+    const continueFrom = typeof opts.continueFrom === 'string' ? opts.continueFrom : '';
+    let previous;
+    if (continueFrom) {
+      previous = this.runs.get(continueFrom) || this.store.get(continueFrom);
+      if (!previous) throw new Error(`续旨失败：找不到上一案 ${continueFrom}`);
+      if (previous.status === 'running') throw new Error('续旨失败：上一案仍在运行，请等它完成或先中止。');
+    }
 
     const mode = ['full', 'single', 'quick'].includes(opts.mode) ? opts.mode : 'full';
     const maxRejections = Math.max(1, Math.min(Number(opts.maxRejections) || 3, 5));
@@ -341,6 +350,25 @@ export class CourtOrchestrator {
       id: `tang-${randomUUID()}`,
       edict: text,
       mode,
+      continueFrom: previous ? previous.id : '',
+      threadId: '',
+      previous: previous
+        ? {
+            id: previous.id,
+            edict: previous.edict,
+            status: previous.status,
+            summary: previous.summary || '',
+            review: previous.review || null,
+            results: (previous.results || []).map((result) => ({
+              ministry: result.ministry,
+              name: result.name,
+              status: result.status,
+              summary: result.summary,
+              artifacts: result.artifacts || [],
+              metrics: result.metrics || {},
+            })),
+          }
+        : null,
       phase: mode === 'quick' ? 'quick' : mode === 'single' ? 'single' : 'drafting',
       status: 'running',
       maxRejections,
@@ -369,9 +397,13 @@ export class CourtOrchestrator {
       rev: 0,
     };
     this.runs.set(run.id, run);
+    run.threadId = (previous && previous.threadId) || (previous && previous.id) || run.id;
     run.requestApproval = (request) => this.requestApproval(run, request);
     this.controllers.set(run.id, new AbortController());
-    this.log(run, '皇帝', '下旨', text, 'neutral');
+    this.log(run, '皇帝', previous ? '续旨' : '下旨', text, 'neutral');
+    if (previous) {
+      this.log(run, '尚书省', '接续', `同案第 ${previous.threadId || previous.id} 号；上一案：${previous.summary || previous.status}`, 'ok');
+    }
     this.log(run, '尚书省', '接旨', `模式：${mode === 'full' ? '完整朝议' : mode === 'single' ? '单部直调' : '快速问答'}；驳回上限：${maxRejections}`, 'ok');
     this.touch(run, true);
     void this.execute(run).catch((error) => this.fail(run, error));
@@ -547,7 +579,14 @@ export class CourtOrchestrator {
     const timeout = setTimeout(() => controller.abort(new Error('朝议超时')), this.options.timeoutMs || DEFAULT_TIMEOUT_MS);
     let parentHandle;
     try {
-      const parent = await createRunParent(this.ctx, { cwd: run.cwd, signal });
+      // 续旨优先复用上一案的父会话；若插件重启/句柄已释放，则新建父会话并通过 run.previous 保留上下文。
+      const previousHandle = run.continueFrom ? this.parentHandles.get(run.continueFrom) : undefined;
+      let parent;
+      if (previousHandle) {
+        parent = { agent: previousHandle.agent, handle: previousHandle, owned: false };
+      } else {
+        parent = await createRunParent(this.ctx, { cwd: run.cwd, signal });
+      }
       parentHandle = parent.handle;
       if (parentHandle) this.parentHandles.set(run.id, parentHandle);
       this.parents.set(run.id, parent.agent);
@@ -751,6 +790,21 @@ export class CourtOrchestrator {
     this.touch(run, true);
   }
 
+  previousContext(run) {
+    const previous = run.previous;
+    if (!previous) return '';
+    const results = (previous.results || [])
+      .map((result) => `${result.name}（${result.status}）：${result.summary || ''} 交付：${(result.artifacts || []).join('、')}`)
+      .join('\n');
+    return [
+      '【同一任务的前情】',
+      `上一道圣旨：${previous.edict}`,
+      `上一案结局：${previous.summary || previous.status}`,
+      `上一案六部：\n${results}`,
+      '本次是续旨：只做增量，不要重复上一案已完成的交付；如需修改旧文件，请明确覆盖范围。',
+    ].join('\n');
+  }
+
   draftTask(run, previous, review) {
     const feedback =
       previous && review
@@ -759,6 +813,7 @@ export class CourtOrchestrator {
     return [
       '【圣旨】',
       run.edict,
+      this.previousContext(run),
       '【钦天监勘验】',
       JSON.stringify(run.feasibility || {}, null, 2),
       feedback,
@@ -773,6 +828,7 @@ export class CourtOrchestrator {
     return [
       '【圣旨】',
       run.edict,
+      this.previousContext(run),
       '【任务】在起草之前，调用 tang_qintian_probe 探测当前 Host 的工具与服务，判断这道圣旨所需能力是否具备。',
       '【重要】六部 tang_* 是 scoped 工具，只有对应部子 Agent 可见；你看到的 tools 只代表你自己的工具面。',
       '请用 probe 返回的 planned_tools 与 services 判断；若缺关键能力，feasible 必须为 false 并在 gaps 中写明。',
@@ -784,6 +840,7 @@ export class CourtOrchestrator {
     return [
       '【中书省草案】',
       JSON.stringify(draft, null, 2),
+      this.previousContext(run),
       '【钦天监勘验】',
       JSON.stringify(run.feasibility || {}, null, 2),
       '【任务】按六条审核：目标、分职、交付、风险、验收、虚实。',
@@ -807,6 +864,7 @@ export class CourtOrchestrator {
     const meta = MINISTRIES[order.ministry];
     return [
       `【圣旨】\n${run.edict}`,
+      this.previousContext(run),
       `【本部条陈】\n${JSON.stringify(order, null, 2)}`,
       `【必须使用的工具】\n${meta.name}可用工具：${meta.toolLabel}。请至少调用一次真实工具，拿到结果后再覆命。`,
       '【边界】所有真实写入/命令都会进入侧边栏审批节点，必须由人类点击“准奏”后才执行；拒绝或超时即打回。',
