@@ -25,6 +25,8 @@ const TEXT = {
     quick: '快速问答',
     ministry: '直调部门',
     rejectLimit: '连驳上限',
+    strict: '严审',
+    strictHint: '本地规则不通过时仍请门下 LLM 复核',
     stage: '当前',
     agentCount: '子 Agent',
     idleTitle: '丹墀静候，圣旨未下',
@@ -97,6 +99,8 @@ const TEXT = {
     quick: 'Quick answer',
     ministry: 'Ministry',
     rejectLimit: 'Rejection limit',
+    strict: 'Strict',
+    strictHint: 'Use LLM review even when local rules fail',
     stage: 'Stage',
     agentCount: 'Agents',
     idleTitle: 'The throne awaits an edict',
@@ -428,7 +432,7 @@ function AgentGrid({ run, t }) {
     { className: 'tda-card' },
     h(Head, {
       title: t.agents,
-      en: `${Object.keys(agents).length} / ${ROLE_ORDER.length}`,
+      en: `${run?.agentCount || 0} LLM / ${ROLE_ORDER.length}`,
       right: h('span', { className: 'tda-badge tda-badge-real' }, t.realBadge),
     }),
     h(
@@ -579,7 +583,7 @@ function Results({ run, t }) {
   return h(
     'section',
     { className: 'tda-card' },
-    h(Head, { title: t.results, en: `${results.length} / 6` }),
+    h(Head, { title: t.results, en: `${results.length} 部` }),
     results.length === 0
       ? h('p', { className: 'tda-pending' }, t.noResults)
       : h(
@@ -706,6 +710,7 @@ function TangPanel() {
   const [mode, setMode] = React.useState('full');
   const [ministry, setMinistry] = React.useState('works');
   const [maxRejections, setMaxRejections] = React.useState(3);
+  const [strictReview, setStrictReview] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [continuation, setContinuation] = React.useState('');
   const copyTimer = React.useRef(null);
@@ -724,6 +729,7 @@ function TangPanel() {
       mode,
       ministry,
       maxRejections,
+      strictReview,
       ...(continuation ? { continueFrom: continuation } : {}),
     });
     setContinuation('');
@@ -834,6 +840,10 @@ function TangPanel() {
           h('select', { className: 'tda-select', value: maxRejections, onChange: (event) => setMaxRejections(Number(event.target.value)), 'aria-label': t.rejectLimit },
             h('option', { value: 2 }, '2'),
             h('option', { value: 3 }, '3'),
+          ),
+          h('label', { className: 'tda-check', title: t.strictHint },
+            h('input', { type: 'checkbox', checked: strictReview, onChange: (event) => setStrictReview(event.target.checked) }),
+            h('span', null, t.strict),
           ),
         ),
         continuation

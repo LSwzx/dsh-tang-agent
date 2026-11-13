@@ -350,6 +350,10 @@ export const TANG_CSS = `
   padding: 6px 9px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 8px;
   color: var(--dsw-alias-label-secondary); font-size: 11.5px;
 }
+.tda-check {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px;
+  color: var(--dsw-alias-label-secondary); cursor: pointer; user-select: none;
+}
 
 /* ---------- org chart ---------- */
 .tda-org {
