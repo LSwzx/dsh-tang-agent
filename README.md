@@ -133,6 +133,24 @@ config:
 
 `court/prompts.js` 的 system prompt 全部固定且不超过 150 字；动态圣旨/条陈只放在 user message，便于 Prompt Cache 命中。
 
+### 自动更新
+
+插件默认开启自动更新（仅对 **npm 安装** 生效）：
+
+- 启动 15 秒后通过 DSH `pluginManager.listVersions()` 查询 `dsh-tang-agent` 的 npm 新版本；
+- 有更新时调用 `pluginManager.updateBundle()`，由 DSH 完成卸载/安装/重启；
+- **本地 `link:` / `file:` 安装自动跳过**，不会覆盖开发目录；
+- 可通过插件配置关闭或调整：
+
+```yaml
+config:
+  autoUpdate: false        # 关闭自动更新
+  autoUpdateDelayMs: 15000 # 启动后延迟检查
+  registry: https://registry.npmmirror.com/
+```
+
+自动更新失败不会影响朝议主流程，下次启动再试。
+
 ### 同一任务续旨
 
 一次朝议完成后，面板会出现 **“续旨此案”** 按钮：

@@ -13,6 +13,7 @@
 import { RunStore } from './court/store.js';
 import { CourtOrchestrator, renderRunReport } from './court/orchestrator.js';
 import { registerRoutes } from './court/routes.js';
+import { startAutoUpdate } from './court/auto-update.js';
 
 export const name = 'dsh-tang-agent';
 export const inject = ['tools', 'agents', 'subagents', 'webServer', 'fs', 'subprocess', 'workingDirectory', 'agentDefaultModel'];
@@ -29,6 +30,13 @@ export function apply(ctx, config = {}) {
     timeoutMs: Number(config.timeoutMs) || 15 * 60 * 1000,
     models: config.models,
   });
+
+  const disposeAutoUpdate = startAutoUpdate(ctx, {
+    autoUpdate: config.autoUpdate,
+    autoUpdateDelayMs: config.autoUpdateDelayMs,
+    registry: config.registry,
+  });
+  ctx.effect(() => disposeAutoUpdate, 'dsh-tang-agent: auto-update');
 
   ctx.effect(
     () => async () => {
