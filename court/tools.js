@@ -442,31 +442,6 @@ export function createMinistryTools(ctx, run, role) {
     );
   }
 
-  if (role === 'qintianjian') {
-    tools.push(
-      defineTool(
-        'tang_qintian_probe',
-        '钦天监：探测当前 Host 的 Service 与工具面，确认方案所需能力是否真的存在。',
-        { type: 'object', properties: {}, additionalProperties: false },
-        async (_args, exec) => {
-          const services = {};
-          for (const name of ['fs', 'subprocess', 'approval', 'storage', 'storageDomain', 'webServer', 'agents', 'subagents', 'llm']) {
-            services[name] = ctx.get(name) !== undefined;
-          }
-          const tools = ctx.tools.schemas(exec.agent).map((schema) => schema.name);
-          let providers = [];
-          try {
-            providers = ctx.subagents ? ctx.subagents.list() : [];
-          } catch {
-            providers = [];
-          }
-          return { services, tools, planned_tools: MINISTRY_TOOL_NAMES, providers };
-        },
-        { concurrencySafe: true },
-      ),
-    );
-  }
-
   return tools;
 }
 
@@ -477,8 +452,4 @@ export const MINISTRY_TOOL_NAMES = {
   revenue: ['tang_revenue_count'],
   personnel: ['tang_personnel_assign'],
   rites: ['tang_rites_doc'],
-  qintianjian: ['tang_qintian_probe'],
-  zhongshu: [],
-  menxia: [],
-  shangshu: [],
 };

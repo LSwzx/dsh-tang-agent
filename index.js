@@ -27,6 +27,7 @@ export function apply(ctx, config = {}) {
   const store = new RunStore(ctx);
   const orchestrator = new CourtOrchestrator(ctx, store, {
     timeoutMs: Number(config.timeoutMs) || 15 * 60 * 1000,
+    models: config.models,
   });
 
   ctx.effect(
@@ -44,8 +45,8 @@ export function apply(ctx, config = {}) {
   ctx.tools.register({
     name: 'tang_court',
     description:
-      'dsh-tang-agent：以三省六部制启动一次真实多智能体朝议。中书起草、钦天监勘验、门下封驳、尚书派发，' +
-      '六部各自派生独立子 Agent 并调用真实工具（读写文件、终端命令、代码扫描、统计、工具盘点、文档读取）。' +
+      'dsh-tang-agent：按需派发的三省六部朝议。钦天监本地探测，中书起草，门下先跑本地规则再按需调用 LLM；' +
+      '工/兵/刑派真实子 Agent，户/礼/吏直接跑 JS 工具，尚书派发与汇总均由代码完成。' +
       '默认等待完成并返回完整起居注；连续驳回达到上限会封还御前。',
     parameters: {
       type: 'object',
@@ -54,6 +55,7 @@ export function apply(ctx, config = {}) {
         mode: { type: 'string', enum: ['full', 'single', 'quick'], description: 'full=完整朝议；single=单部直调；quick=快速问答。' },
         max_rejections: { type: 'integer', description: '门下省连驳上限，默认 3。' },
         ministry: { type: 'string', enum: ['works', 'justice', 'war', 'rites', 'revenue', 'personnel'], description: '单部直调时的部门。' },
+        strict_review: { type: 'boolean', description: '严审开关：本地规则不通过时仍调用门下 LLM 复核；默认 false。' },
         continue_from: { type: 'string', description: '续旨：上一案的 runId；复用同一父会话并带上上一案结果。' },
         wait: { type: 'boolean', description: '是否等待完成；默认 true。false 时只返回 runId。' },
       },
@@ -70,6 +72,7 @@ export function apply(ctx, config = {}) {
         mode: args.mode,
         maxRejections: args.max_rejections,
         ministry: args.ministry,
+        strictReview: args.strict_review,
         continueFrom: args.continue_from,
       });
       if (args.wait === false) return `started run ${runId}`;

@@ -1,19 +1,22 @@
 /**
- * dsh-tang-agent · 真实朝议编排器
+ * dsh-tang-agent · 按需朝议编排器
  *
- * 每个角色都是真正由 `ctx.subagents.startActivation({ provider: 'spawn' })`
- * 派生的独立 Agent；六部并发，三省串行。所有 Prompt 来自 prompts.py；
- * 所有工具调用、流式文本、审批结果都进入 run 状态并推给 UI。
+ * 钦天监本地探测；中书按需起草；门下先跑本地规则，再按需调用弱模型；
+ * 尚书派发/汇总由代码完成；工兵刑派生真实子 Agent，户礼吏直接跑本地 JS 工具。
  */
 
 import { randomUUID } from 'node:crypto';
 import { createRunParent, runSubagent, defaultModelOptions } from './agent-runner.js';
 import { loadPrompts } from './prompts.js';
-import { createMinistryTools } from './tools.js';
-import { MINISTRIES, MINISTRY_ORDER, ROLE_LABELS, STAGE_LABELS } from './meta.js';
+import { createMinistryTools, MINISTRY_TOOL_NAMES } from './tools.js';
+import { probeCapabilities } from './probe.js';
+import { localReview } from './local-review.js';
+import { MINISTRIES, MINISTRY_ORDER, ROLE_LABELS } from './meta.js';
 
 const MAX_EDICT_LENGTH = 4000;
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// 这三部只做确定性读取/统计/分派，不再启动 LLM。
+const DETERMINISTIC_ROLES = new Set(['rites', 'revenue', 'personnel']);
 
 function now() {
   return new Date().toISOString();
@@ -61,32 +64,82 @@ function asArray(value) {
   return [];
 }
 
+function ministryKey(order) {
+  if (!order || typeof order !== 'object') return '';
+  if (MINISTRY_ORDER.includes(order.ministry)) return order.ministry;
+  const found = MINISTRY_ORDER.find(
+    (key) =>
+      order.ministry === MINISTRIES[key].name ||
+      order.name === MINISTRIES[key].name ||
+      order.ministry_name === MINISTRIES[key].name,
+  );
+  return found || '';
+}
+
+function normalizeOrder(key, found) {
+  const meta = MINISTRIES[key];
+  return {
+    ministry: key,
+    name: meta.name,
+    objective: String(found?.objective || found?.order || ''),
+    deliverable: String(found?.deliverable || ''),
+    tools: meta.toolLabel ? [meta.toolLabel] : [],
+    deadline: String(found?.deadline || '旬日'),
+    args: found && found.args && typeof found.args === 'object' && !Array.isArray(found.args) ? found.args : {},
+    wave: key === 'works' ? 1 : 2,
+  };
+}
+
+function mergeOrder(previous, incoming) {
+  const next = { ...previous };
+  for (const key of ['objective', 'deliverable', 'deadline']) {
+    if (String(incoming[key] || '').trim()) next[key] = incoming[key];
+  }
+  if (incoming.args && Object.keys(incoming.args).length) next.args = { ...previous.args, ...incoming.args };
+  if (incoming.name) next.name = incoming.name;
+  if (Array.isArray(incoming.tools) && incoming.tools.length) next.tools = incoming.tools;
+  next.wave = incoming.wave;
+  return next;
+}
+
 function normalizeDraft(raw, edict, revision, previous) {
   const payload = raw && typeof raw === 'object' ? raw : {};
   const sourceOrders = Array.isArray(payload.orders) ? payload.orders : [];
-  const orders = MINISTRY_ORDER.map((key) => {
-    const meta = MINISTRIES[key];
-    const found = sourceOrders.find(
-      (order) => order && (order.ministry === key || order.name === meta.name || order.ministry_name === meta.name),
-    );
-    return {
-      ministry: key,
-      name: meta.name,
-      objective: String(found?.objective || found?.order || `${meta.duty}：${edict.slice(0, 40)}`),
-      deliverable: String(found?.deliverable || `${meta.name}交付物`),
-      tools: meta.toolLabel ? [meta.toolLabel] : [],
-      deadline: String(found?.deadline || '旬日'),
-      wave: key === 'works' ? 1 : 2,
-    };
-  });
-  const summary = String(payload.summary || payload.plan || `中书省奉旨草拟：${edict}`).slice(0, 1200);
+  const incoming = [];
+  const seen = new Set();
+  for (const found of sourceOrders) {
+    const key = ministryKey(found);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    incoming.push(normalizeOrder(key, found));
+  }
+
+  let orders;
+  if (previous) {
+    const merged = new Map((previous.orders || []).map((order) => [order.ministry, order]));
+    for (const order of incoming) {
+      const old = merged.get(order.ministry);
+      merged.set(order.ministry, old ? mergeOrder(old, order) : order);
+    }
+    orders = MINISTRY_ORDER.map((key) => merged.get(key)).filter(Boolean);
+  } else {
+    orders = incoming;
+  }
+
+  const summary = String(payload.summary || payload.plan || (previous && previous.summary) || '').slice(0, 1200);
+  const risks = asArray(payload.risks);
+  const acceptance = asArray(payload.acceptance);
   return {
     revision,
     summary,
     orders,
-    risks: asArray(payload.risks).length ? asArray(payload.risks) : ['风险：模型未列，按最低限度保留工期与预算风险。'],
-    acceptance: asArray(payload.acceptance).length ? asArray(payload.acceptance) : ['验收：六部交付物齐备并经尚书省核验。'],
-    notes: previous ? `依门下省驳议修订（第 ${previous.revision} 稿）。` : '中书省初拟。',
+    risks: risks.length
+      ? risks
+      : (previous && previous.risks && previous.risks.length ? previous.risks : ['未列风险：按最低限度保留工期、预算与安全风险。']),
+    acceptance: acceptance.length
+      ? acceptance
+      : (previous && previous.acceptance && previous.acceptance.length ? previous.acceptance : ['验收：交付物存在且可回读。']),
+    notes: previous ? `依门下省驳议增量修订（第 ${previous.revision} 稿）。` : '中书省初拟。',
   };
 }
 
@@ -103,17 +156,6 @@ function normalizeReview(text, raw) {
       : approved
         ? []
         : [String(payload.comment || text || '门下省未给出具体驳议').slice(0, 300)],
-  };
-}
-
-function normalizeFeasibility(text, raw) {
-  const payload = raw && typeof raw === 'object' ? raw : {};
-  return {
-    feasible: payload.feasible !== false,
-    gaps: asArray(payload.gaps),
-    required_tools: asArray(payload.required_tools),
-    fallback: String(payload.fallback || ''),
-    evidence: asArray(payload.evidence),
   };
 }
 
@@ -137,6 +179,7 @@ export class CourtOrchestrator {
     this.ctx = ctx;
     this.store = store;
     this.options = options;
+    this.models = options.models && typeof options.models === 'object' ? options.models : {};
     this.runs = new Map();
     this.controllers = new Map();
     this.parents = new Map();
@@ -350,6 +393,7 @@ export class CourtOrchestrator {
       id: `tang-${randomUUID()}`,
       edict: text,
       mode,
+      strictReview: Boolean(opts.strictReview),
       continueFrom: previous ? previous.id : '',
       threadId: '',
       previous: previous
@@ -434,14 +478,24 @@ export class CourtOrchestrator {
     this.touch(run, true);
   }
 
-  async callRole(run, role, task, signal) {
+  modelOptions(tier = 'strong') {
+    const base = defaultModelOptions(this.ctx) || {};
+    const configured = this.models[tier];
+    if (!configured) return Object.keys(base).length ? base : undefined;
+    if (typeof configured === 'string') return { ...base, model: configured };
+    if (configured && typeof configured === 'object') return { ...base, ...configured };
+    return Object.keys(base).length ? base : undefined;
+  }
+
+  async callRole(run, role, task, signal, tier = 'strong') {
     const prompts = await loadPrompts();
     const prompt = prompts[role];
-    if (!prompt) throw new Error(`prompts.py 缺少角色：${role}`);
+    if (!prompt) throw new Error(`prompts.js 缺少角色：${role}`);
     const label = this.roleLabel(role);
     const tools = createMinistryTools(this.ctx, run, role);
     const parent = this.parents.get(run.id);
     if (!parent) throw new Error('朝议父 Agent 不存在。');
+    const agentOptions = this.modelOptions(tier);
 
     if (run.agents[role]) {
       run.agentHistory = run.agentHistory || [];
@@ -451,7 +505,7 @@ export class CourtOrchestrator {
       role,
       name: label,
       status: 'running',
-      model: defaultModelOptions(this.ctx)?.model || 'default',
+      model: agentOptions?.model || 'default',
       sessionId: '',
       stream: '',
       text: '',
@@ -472,6 +526,7 @@ export class CourtOrchestrator {
         prompt,
         task,
         tools,
+        agentOptions,
         cwd: run.cwd,
         parent,
         signal,
@@ -509,6 +564,98 @@ export class CourtOrchestrator {
       this.log(run, label, '失败', String(error?.message || error), 'bad');
       this.touch(run, true);
       throw error;
+    }
+  }
+
+  markLocalAgent(run, role, { summary = '', toolName = '', args = {}, result = undefined, status = 'done' } = {}) {
+    const label = this.roleLabel(role);
+    run.agents[role] = {
+      role,
+      name: label,
+      status,
+      model: 'local-js',
+      sessionId: '',
+      local: true,
+      stream: summary,
+      text: summary,
+      toolCalls: toolName
+        ? [{ name: toolName, args, result: String(typeof result === 'string' ? result : JSON.stringify(result)).slice(0, 1200), finished: true }]
+        : [],
+      error: '',
+      startedAt: now(),
+      finishedAt: now(),
+    };
+    this.touch(run);
+  }
+
+  localMetrics(role, result) {
+    if (role === 'revenue') {
+      return {
+        source: result.source,
+        chars: result.chars,
+        cjk: result.cjk,
+        latin_words: result.latin_words,
+        words: result.words,
+        lines: result.lines,
+        approx_tokens: result.approx_tokens,
+      };
+    }
+    if (role === 'rites') {
+      return {
+        path: result.path,
+        lines: result.lines,
+        headings: (result.headings || []).length,
+        truncated: Boolean(result.truncated),
+      };
+    }
+    if (role === 'personnel') return { count: result.count };
+    return {};
+  }
+
+  async runLocalRole(run, order, signal) {
+    const role = order.ministry;
+    const label = this.roleLabel(role);
+    const tools = createMinistryTools(this.ctx, run, role);
+    const tool = tools.find((item) => item.name === MINISTRY_TOOL_NAMES[role]?.[0]) || tools[0];
+    if (!tool) throw new Error(`${label}没有可用的本地工具。`);
+    const args = { ...(order.args || {}) };
+    if (role === 'rites' && !args.path) args.path = 'README.md';
+    if (role === 'revenue' && !args.text && !args.path) args.text = run.edict;
+    const exec = { agent: this.parents.get(run.id), signal, callId: `local-${randomUUID()}` };
+    try {
+      const result = await tool.execute(args, exec);
+      const summary =
+        role === 'revenue'
+          ? `户部本地统计：字符 ${result.chars}，近似 Token ${result.approx_tokens}，行数 ${result.lines}`
+          : role === 'rites'
+            ? `礼部本地读取：${result.path}，${result.lines} 行，标题 ${result.headings?.length || 0} 个`
+            : role === 'personnel'
+              ? `吏部本地分派：${result.count} 个角色`
+              : `${label}本地执行完成。`;
+      const artifacts = role === 'rites' && result.path ? [result.path] : [];
+      const metrics = this.localMetrics(role, result);
+      this.markLocalAgent(run, role, { summary, toolName: tool.name, args, result: metrics });
+      this.log(run, label, '本地工具', `${tool.name} → ${summary}`, 'ok');
+      return {
+        ministry: role,
+        name: MINISTRIES[role].name,
+        status: 'done',
+        summary,
+        artifacts,
+        metrics,
+      };
+    } catch (error) {
+      const message = String(error?.message || error);
+      this.markLocalAgent(run, role, { summary: message, toolName: tool.name, args, result: message, status: 'blocked' });
+      this.log(run, label, '本地受阻', message, 'bad');
+      return {
+        ministry: role,
+        name: MINISTRIES[role].name,
+        status: 'blocked',
+        summary: message,
+        artifacts: [],
+        metrics: {},
+      };
     }
   }
 
@@ -598,6 +745,7 @@ export class CourtOrchestrator {
           'zhongshu',
           `【快速问答】\n皇帝问：${run.edict}\n\n请直接回答，不要走朝议，不要编造工具结果。`,
           signal,
+          'strong',
         );
         run.summary = answer;
       } else if (run.mode === 'single') {
@@ -610,12 +758,28 @@ export class CourtOrchestrator {
           deliverable: `${meta.name}交付物`,
           tools: [meta.toolLabel],
           deadline: '旬日',
+          args: {},
+          wave: role === 'works' ? 1 : 2,
         };
         run.orders = [order];
-        const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
-        const parsed = parseJson(output);
-        run.results = [normalizeMinistryResult(role, output, parsed)];
-        run.summary = run.results[0].summary;
+        if (DETERMINISTIC_ROLES.has(role)) {
+          const result = await this.runLocalRole(run, order, signal);
+          run.results = [result];
+          run.summary = result.summary;
+          if (result.status === 'blocked') {
+            run.status = 'failed';
+            run.phase = 'failed';
+            run.error = result.summary;
+            run.finishedAt = now();
+            this.log(run, '尚书省', '本地受阻', result.summary, 'bad');
+            this.touch(run, true);
+          }
+        } else {
+          const output = await this.callRole(run, role, this.ministryTask(run, order), signal, 'strong');
+          const parsed = parseJson(output);
+          run.results = [normalizeMinistryResult(role, output, parsed)];
+          run.summary = run.results[0].summary;
+        }
       } else {
         await this.runFullCourt(run, signal);
       }
@@ -645,11 +809,16 @@ export class CourtOrchestrator {
   }
 
   async runFullCourt(run, signal) {
-    // 先由钦天监勘验能力面，再让中书起草；避免先写出根本做不到的方案。
+    // 钦天监改为本地 JS 探测：不启动 LLM，只把能力面作为中书起草的上下文。
     run.phase = 'feasibility';
     this.touch(run, true);
-    const feasibilityText = await this.callRole(run, 'qintianjian', this.feasibilityTask(run), signal);
-    run.feasibility = normalizeFeasibility(feasibilityText, parseJson(feasibilityText));
+    run.feasibility = probeCapabilities(this.ctx, run);
+    this.markLocalAgent(run, 'qintianjian', {
+      summary: `钦天监本地探测：services=${Object.entries(run.feasibility.services).filter(([, ok]) => ok).map(([name]) => name).join('、')}`,
+      toolName: 'local-probe',
+      result: run.feasibility,
+    });
+    this.log(run, '钦天监', '本地勘验', `缺口 ${run.feasibility.gaps.length} 项；不调用模型。`, run.feasibility.feasible ? 'ok' : 'bad');
     this.touch(run, true);
     if (!run.feasibility.feasible) {
       run.status = 'failed';
@@ -663,8 +832,9 @@ export class CourtOrchestrator {
     }
 
     run.phase = 'drafting';
+    this.touch(run, true);
     let draft = normalizeDraft(
-      parseJson(await this.callRole(run, 'zhongshu', this.draftTask(run), signal)),
+      parseJson(await this.callRole(run, 'zhongshu', this.draftTask(run), signal, 'strong')),
       run.edict,
       1,
       null,
@@ -674,13 +844,27 @@ export class CourtOrchestrator {
     this.touch(run, true);
 
     for (let attempt = 1; attempt <= run.maxRejections + 1; attempt += 1) {
-      run.phase = 'reviewing';
+      const local = localReview(draft, run.edict);
+      run.localReview = local;
+      let review;
+      if ((!local.approved && !run.strictReview) || (local.hard && local.hard.length)) {
+        review = { ...local, comment: `本地规则驳回：${local.issues[0] || '草案不合格。'}` };
+        this.markLocalAgent(run, 'menxia', {
+          summary: review.comment,
+          toolName: 'local-review',
+          result: local,
+          status: 'blocked',
+        });
+        this.log(run, '门下省', '本地驳回', review.comment, 'bad');
+      } else {
+        run.phase = 'reviewing';
+        this.touch(run, true);
+        const reviewText = await this.callRole(run, 'menxia', this.reviewTask(run, draft), signal, 'weak');
+        review = { ...normalizeReview(reviewText, parseJson(reviewText)), source: 'llm' };
+      }
+      run.review = review;
       this.touch(run, true);
-      const reviewText = await this.callRole(run, 'menxia', this.reviewTask(run, draft), signal);
-      run.review = normalizeReview(reviewText, parseJson(reviewText));
-      this.touch(run, true);
-
-      if (run.review.approved) break;
+      if (review.approved) break;
 
       run.rejections += 1;
       if (run.rejections >= run.maxRejections) {
@@ -695,12 +879,7 @@ export class CourtOrchestrator {
 
       run.phase = 'revising';
       this.touch(run, true);
-      const revisedText = await this.callRole(
-        run,
-        'zhongshu',
-        this.draftTask(run, draft, run.review),
-        signal,
-      );
+      const revisedText = await this.callRole(run, 'zhongshu', this.draftTask(run, draft, review), signal, 'strong');
       draft = normalizeDraft(parseJson(revisedText), run.edict, attempt + 1, draft);
       run.draft = draft;
       run.revision = attempt + 1;
@@ -708,87 +887,124 @@ export class CourtOrchestrator {
     }
 
     if (!run.review || !run.review.approved) throw new Error('门下省未准奏，朝议停止。');
+    if (draft.orders.length === 0) throw new Error('中书省未派任何部门，朝议停止。');
 
     run.phase = 'dispatching';
+    run.dispatch = this.buildDispatch(draft);
+    this.markLocalAgent(run, 'shangshu', {
+      summary: run.dispatch.note,
+      toolName: 'local-dispatch',
+      result: run.dispatch,
+    });
+    this.log(run, '尚书省', '本地派发', run.dispatch.note, 'ok');
     this.touch(run, true);
-    const dispatchText = await this.callRole(run, 'shangshu', this.dispatchTask(run, draft), signal);
-    run.dispatch = { text: dispatchText, plan: parseJson(dispatchText) };
 
     run.phase = 'executing';
-    run.wave = 1;
     this.touch(run, true);
-    const executeRole = async (role) => {
-      const order = draft.orders.find((item) => item.ministry === role);
-      const output = await this.callRole(run, role, this.ministryTask(run, order), signal);
-      return normalizeMinistryResult(role, output, parseJson(output));
+    const executeOrder = async (order) => {
+      if (DETERMINISTIC_ROLES.has(order.ministry)) return this.runLocalRole(run, order, signal);
+      const output = await this.callRole(run, order.ministry, this.ministryTask(run, order), signal, 'strong');
+      return normalizeMinistryResult(order.ministry, output, parseJson(output));
     };
-
-    const wave1Roles = draft.orders.filter((order) => order.wave === 1).map((order) => order.ministry);
-    if (wave1Roles.length === 0) wave1Roles.push('works');
-    const wave2Roles = draft.orders
-      .filter((order) => order.wave !== 1 && !wave1Roles.includes(order.ministry))
-      .map((order) => order.ministry);
-
-    this.log(run, '尚书省', '第一波', `先派 ${wave1Roles.join('、')} 落盘交付物；其余部等落盘后再读取。`, 'ok');
-    const wave1 = await Promise.allSettled(wave1Roles.map(executeRole));
-    const toResult = (role, item) =>
+    const toResult = (order, item) =>
       item && item.status === 'fulfilled'
         ? item.value
         : {
-            ministry: role,
-            name: MINISTRIES[role].name,
+            ministry: order.ministry,
+            name: MINISTRIES[order.ministry].name,
             status: 'failed',
             summary: String(item?.reason?.message || item?.reason || '未执行'),
             artifacts: [],
             metrics: {},
           };
-    const wave1Results = wave1Roles.map((role, index) => toResult(role, wave1[index]));
-    run.results = wave1Results.slice();
-    const wave1Error = wave1Results.find((result) => result.status !== 'done');
-    if (wave1Error) {
-      run.status = 'failed';
-      run.phase = 'failed';
-      run.error = `熔断：第一波 ${wave1Error.name} 未完成（${wave1Error.status}）：${wave1Error.summary}`;
-      run.summary = run.error;
-      run.finishedAt = now();
-      this.log(run, '尚书省', '熔断', run.error + '；不再派第二波，直接呈报皇帝。', 'bad');
+
+    const wave1 = draft.orders.filter((order) => order.wave === 1);
+    const wave2 = draft.orders.filter((order) => order.wave !== 1);
+    if (wave1.length) {
+      run.wave = 1;
       this.touch(run, true);
-      return;
+      this.log(run, '尚书省', '第一波', `按需派发 ${wave1.map((order) => order.name).join('、')}。`, 'ok');
+      const settled = await Promise.allSettled(wave1.map(executeOrder));
+      const results = wave1.map((order, index) => toResult(order, settled[index]));
+      run.results = results;
+      const error = results.find((result) => result.status !== 'done');
+      if (error) {
+        run.status = 'failed';
+        run.phase = 'failed';
+        run.error = `熔断：第一波 ${error.name} 未完成（${error.status}）：${error.summary}`;
+        run.summary = run.error;
+        run.finishedAt = now();
+        this.log(run, '尚书省', '熔断', run.error + '；不再派第二波，直接呈报皇帝。', 'bad');
+        this.touch(run, true);
+        return;
+      }
     }
-    this.log(run, '尚书省', '第一波完成', '第一波全部落盘，进入第二波。', 'ok');
 
     run.wave = 2;
     this.touch(run, true);
-    this.log(run, '尚书省', '第二波', `派发 ${wave2Roles.join('、')}（读取/统计/审查）。`, 'ok');
-    const wave2 = await Promise.allSettled(wave2Roles.map(executeRole));
-
-    const byRole = {};
-    wave1Roles.forEach((role, index) => {
-      byRole[role] = wave1[index];
-    });
-    wave2Roles.forEach((role, index) => {
-      byRole[role] = wave2[index];
-    });
-    run.results = MINISTRY_ORDER.map((role) => toResult(role, byRole[role]));
-    const wave2Error = run.results.find((result) => result.status === 'failed');
-    if (wave2Error) {
+    if (wave2.length) this.log(run, '尚书省', '第二波', `按需派发 ${wave2.map((order) => order.name).join('、')}。`, 'ok');
+    const settled2 = await Promise.allSettled(wave2.map(executeOrder));
+    const results2 = wave2.map((order, index) => toResult(order, settled2[index]));
+    const byRole = new Map([...(run.results || []), ...results2].map((result) => [result.ministry, result]));
+    run.results = MINISTRY_ORDER.map((role) => byRole.get(role)).filter(Boolean);
+    const error = run.results.find((result) => result.status === 'failed');
+    if (error) {
       run.status = 'failed';
       run.phase = 'failed';
-      run.error = `熔断：第二波 ${wave2Error.name} 严重报错：${wave2Error.summary}`;
+      run.error = `熔断：第二波 ${error.name} 严重报错：${error.summary}`;
       run.summary = run.error;
       run.finishedAt = now();
       this.log(run, '尚书省', '熔断', run.error + '；不强行汇总，直接呈报皇帝。', 'bad');
       this.touch(run, true);
       return;
     }
-    this.touch(run, true);
 
     run.phase = 'aggregating';
-    this.touch(run, true);
-    const summary = await this.callRole(run, 'shangshu', this.aggregateTask(run), signal);
-    run.summary = summary;
+    run.summary = this.aggregateResults(run);
+    const shangshu = run.agents.shangshu;
+    if (shangshu) {
+      shangshu.text = run.summary;
+      shangshu.stream = run.summary;
+      shangshu.finishedAt = now();
+    }
+    this.log(run, '尚书省', '本地汇总', run.summary, 'ok');
     this.touch(run, true);
   }
+
+  buildDispatch(draft) {
+    const assignments = draft.orders.map((order) => ({
+      ministry: order.ministry,
+      name: order.name,
+      order: order.objective,
+      deliverable: order.deliverable,
+      deadline: order.deadline,
+      wave: order.wave,
+      executor: DETERMINISTIC_ROLES.has(order.ministry) ? 'local-js' : 'llm',
+    }));
+    return {
+      note: `按需派发 ${assignments.length} 部：${assignments.map((item) => `${item.name}(${item.executor})`).join('、')}`,
+      assignments,
+    };
+  }
+
+  aggregateResults(run) {
+    const results = run.results || [];
+    const done = results.filter((result) => result.status === 'done');
+    const evidence = done.map((result) => `${result.name}：${result.summary}`).join('\n') || '无部门交付。';
+    const artifacts = [...new Set(results.flatMap((result) => result.artifacts || []))];
+    const manual = results
+      .filter((result) => result.status !== 'done')
+      .map((result) => `${result.name}：${result.summary}`)
+      .join('；') || '无';
+    return [
+      `结论：${done.length}/${results.length} 部办结；按需派发，未派部门不占预算。`,
+      `证据：\n${evidence}`,
+      `需皇帝手动：${manual}`,
+      `交付物：${artifacts.length ? artifacts.join('、') : '无'}`,
+      `风险：${(run.draft?.risks || []).join('；') || '无新增风险'}`,
+    ].join('\n');
+  }
+
 
   previousContext(run) {
     const previous = run.previous;
@@ -808,31 +1024,39 @@ export class CourtOrchestrator {
   draftTask(run, previous, review) {
     const feedback =
       previous && review
-        ? `\n【门下省驳议】\n${JSON.stringify({ comment: review.comment, issues: review.issues }, null, 2)}\n请只修改被驳部分，输出完整新稿。`
+        ? `\n【门下省驳议】\n${JSON.stringify({ comment: review.comment, issues: review.issues }, null, 2)}\n只重写被驳回部门的条陈，未涉及的部门不要重复输出。`
         : '';
+    const existing = previous
+      ? `\n【现有条陈】\n${JSON.stringify(
+          previous.orders.map((order) => ({
+            ministry: order.ministry,
+            objective: order.objective,
+            deliverable: order.deliverable,
+            args: order.args,
+          })),
+        )}`
+      : '';
+    const capability = JSON.stringify({
+      feasible: run.feasibility?.feasible,
+      gaps: run.feasibility?.gaps || [],
+      services: run.feasibility?.services || {},
+      planned_tools: run.feasibility?.planned_tools || {},
+    });
     return [
       '【圣旨】',
       run.edict,
       this.previousContext(run),
-      '【钦天监勘验】',
-      JSON.stringify(run.feasibility || {}, null, 2),
+      '【能力勘验】',
+      capability,
+      existing,
       feedback,
       '【六部 id】',
       MINISTRY_ORDER.map((key) => `${key}=${MINISTRIES[key].name}`).join('，'),
-      '【输出】只输出 JSON：{"summary":"...","orders":[{"ministry":"works","objective":"...","deliverable":"...","deadline":"..."}],"risks":["..."],"acceptance":["..."]}',
-      '六部都要有条陈；risks 与 acceptance 至少各两条。',
-    ].join('\n');
-  }
-
-  feasibilityTask(run) {
-    return [
-      '【圣旨】',
-      run.edict,
-      this.previousContext(run),
-      '【任务】在起草之前，调用 tang_qintian_probe 探测当前 Host 的工具与服务，判断这道圣旨所需能力是否具备。',
-      '【重要】六部 tang_* 是 scoped 工具，只有对应部子 Agent 可见；你看到的 tools 只代表你自己的工具面。',
-      '请用 probe 返回的 planned_tools 与 services 判断；若缺关键能力，feasible 必须为 false 并在 gaps 中写明。',
-      '只输出 JSON：{"feasible":true,"gaps":[],"required_tools":[],"fallback":"","evidence":[]}',
+      '【按需派发】只为真正需要的部门出条陈；工/兵/刑由 LLM 执行，户/礼/吏由本地 JS 工具执行；不要为凑数派部。',
+      '礼部条陈必须给 args.path；户部可给 args.text 或 args.path；吏部无需 args。',
+      '若当前 risks 或 acceptance 为空，必须在本次回复补齐，修订时也不能省略。',
+      '【输出】只输出 JSON：{"summary":"...","orders":[{"ministry":"works","objective":"...","deliverable":"...","args":{},"deadline":"..."}],"risks":["..."],"acceptance":["..."]}',
+      '修订时只输出被驳回部门的 orders；risks 与 acceptance 若未变化可省略。',
     ].join('\n');
   }
 
@@ -840,55 +1064,24 @@ export class CourtOrchestrator {
     return [
       '【中书省草案】',
       JSON.stringify(draft, null, 2),
-      this.previousContext(run),
-      '【钦天监勘验】',
-      JSON.stringify(run.feasibility || {}, null, 2),
-      '【任务】按六条审核：目标、分职、交付、风险、验收、虚实。',
-      '【工具面说明】六部 tang_* 工具是 scoped 工具，只有对应部子 Agent 可见；',
-      '你只看到 read 是正常的，不要因为自己看不到六部工具就驳回。请依据草案、钦天监 planned_tools 与 Host services 判断。',
-      '只输出 JSON：{"approved":true,"comment":"...","issues":[]}',
-      '若钦天监 feasible=false，或草案要求当前工具面做不到的能力，必须驳回。',
-    ].join('\n');
-  }
-
-  dispatchTask(run, draft) {
-    return [
-      '【准奏草案】',
-      JSON.stringify(draft, null, 2),
-      '【任务】按六部条陈下发，标明依赖与并行关系。',
-      '只输出 JSON：{"dispatch_note":"...","assignments":[{"ministry":"works","order":"...","deadline":"..."}]}',
+      '【本地规则审核】',
+      JSON.stringify(run.localReview || {}, null, 2),
+      '【能力勘验】',
+      JSON.stringify({ feasible: run.feasibility?.feasible, gaps: run.feasibility?.gaps || [] }),
+      '【任务】审目标、分职、交付、风险、验收；只输出 JSON：{"approved":true,"comment":"...","issues":[]}。',
+      '若本地规则列出的问题仍未解决，或草案要求当前能力面做不到的能力，必须驳回。',
     ].join('\n');
   }
 
   ministryTask(run, order) {
-    const meta = MINISTRIES[order.ministry];
+    const toolNames = (MINISTRY_TOOL_NAMES[order.ministry] || []).join(' / ');
     return [
-      `【圣旨】\n${run.edict}`,
-      this.previousContext(run),
+      `【圣旨摘要】\n${run.edict.slice(0, 300)}`,
       `【本部条陈】\n${JSON.stringify(order, null, 2)}`,
-      `【必须使用的工具】\n${meta.name}可用工具：${meta.toolLabel}。请至少调用一次真实工具，拿到结果后再覆命。`,
-      '【边界】所有真实写入/命令都会进入侧边栏审批节点，必须由人类点击“准奏”后才执行；拒绝或超时即打回。',
+      `【必须使用的工具】\n${toolNames}。至少调用一次真实工具，拿到结果后再覆命。`,
+      '【边界】写入/命令会进入侧边栏审批；拒绝或超时即打回。',
       '【输出】只输出 JSON：{"ministry":"' + order.ministry + '","status":"done|blocked","summary":"...","artifacts":["..."],"metrics":{}}',
-      '不得编造工具结果；工具失败就在 summary 中写明失败原因。',
-    ].join('\n');
-  }
-
-  aggregateTask(run) {
-    return [
-      '【六部覆命】',
-      JSON.stringify(
-        run.results.map((result) => ({
-          ministry: result.ministry,
-          name: result.name,
-          status: result.status,
-          summary: result.summary,
-          artifacts: result.artifacts,
-          metrics: result.metrics,
-        })),
-        null,
-        2,
-      ),
-      '【任务】核验交付物，按“结论 / 证据 / 需皇帝手动 / 风险”四段汇总。',
+      '不得编造工具结果；工具失败就在 summary 中写明原因。',
     ].join('\n');
   }
 }
@@ -915,6 +1108,12 @@ export function renderRunReport(run) {
     lines.push('## 钦天监勘验');
     lines.push(`可行：${run.feasibility.feasible ? '是' : '否'}`);
     for (const gap of run.feasibility.gaps) lines.push(`- 缺口：${gap}`);
+  }
+  if (run.localReview) {
+    lines.push('');
+    lines.push('## 门下省本地规则');
+    lines.push(`通过：${run.localReview.approved ? '是' : '否'}（${run.localReview.source || 'local'}）`);
+    for (const issue of run.localReview.issues || []) lines.push(`- ${issue}`);
   }
   if (run.review) {
     lines.push('');

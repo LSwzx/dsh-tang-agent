@@ -3,7 +3,7 @@
  *
  * 使用 DSH 的 `ctx.subagents.startActivation({ provider: 'spawn', ... })`
  * 派生独立子 Agent；在 `agent/created` 事件里：
- *   1. 注入角色 System Prompt（来自 prompts.py）；
+ *   1. 注入角色 System Prompt（来自 court/prompts.js，纯 JS）；
  *   2. 注册该部专属工具（scoped tools）；
  *   3. 只保留 read 全局工具，隐藏其他无关能力；
  *   4. 订阅子 Agent 的 session/event，向上回传真实工具调用与流式文本。
@@ -85,9 +85,10 @@ function extractOutput(result) {
  * @param {object} options
  * @param {string} options.role 角色 id（works / justice / ...）
  * @param {string} options.label 展示名
- * @param {string} options.prompt 从 prompts.py 动态读取的 System Prompt
+ * @param {string} options.prompt 角色 System Prompt（court/prompts.js 的固定文本）
  * @param {string} options.task 交给子 Agent 的任务正文
  * @param {Array} options.tools 该角色专属的工具定义
+ * @param {object} [options.agentOptions] 强弱模型选择；缺省用 Host 默认
  * @param {string} options.cwd 工作目录
  * @param {object} options.parent 父 Agent
  * @param {AbortSignal} options.signal 取消/超时信号
@@ -100,7 +101,7 @@ export async function runSubagent(ctx, options) {
   if (!provider) throw new Error('DSH 未加载 spawn 子 Agent provider，无法创建真实子 Agent。');
 
   const childId = randomUUID();
-  const model = defaultModelOptions(ctx);
+  const model = options.agentOptions || defaultModelOptions(ctx);
   let childAgent;
   let activation;
   let agentPreset;
